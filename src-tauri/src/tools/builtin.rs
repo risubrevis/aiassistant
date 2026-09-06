@@ -923,8 +923,24 @@ async fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     let ft = meta.file_type();
     if ft.is_symlink() {
         let target = tokio::fs::read_link(src).await?;
-        tokio::fs::symlink(&target, dst).await?;
-        return Ok(());
+        #[cfg(unix)]
+        {
+            tokio::fs::symlink(&target, dst).await?;
+            return Ok(());
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows has no portable async symlink primitive and creating
+            // symlinks needs privileges; copy the resolved target instead.
+            let abs_target = if target.is_absolute() {
+                target
+            } else {
+                src.parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(&target)
+            };
+            return Box::pin(copy_recursive(&abs_target, dst)).await;
+        }
     }
     if ft.is_dir() {
         tokio::fs::create_dir(dst).await?;
@@ -956,8 +972,25 @@ async fn move_cross_device(src: &Path, dst: &Path, ft: std::fs::FileType) -> Too
             Ok(t) => t,
             Err(e) => return ToolResult::err(format!("read symlink failed: {e}")),
         };
-        if let Err(e) = tokio::fs::symlink(&target, dst).await {
-            return ToolResult::err(format!("recreate symlink failed: {e}"));
+        #[cfg(unix)]
+        {
+            if let Err(e) = tokio::fs::symlink(&target, dst).await {
+                return ToolResult::err(format!("recreate symlink failed: {e}"));
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows: copy the resolved target instead of recreating the link.
+            let abs_target = if target.is_absolute() {
+                target
+            } else {
+                src.parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(&target)
+            };
+            if let Err(e) = copy_recursive(&abs_target, dst).await {
+                return ToolResult::err(format!("copy symlink target failed: {e}"));
+            }
         }
         return match tokio::fs::remove_file(src).await {
             Ok(_) => ToolResult::ok(format!(
