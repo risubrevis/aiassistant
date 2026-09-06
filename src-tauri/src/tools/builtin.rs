@@ -562,7 +562,13 @@ fn search_file_sync(
     if is_sensitive_file(p) {
         return;
     }
-    let rel = p.strip_prefix(root).unwrap_or(p).display().to_string();
+    // Forward-slash relative paths keep tool output consistent across OSes
+    // (matches the globx matcher, which normalizes separators).
+    let rel = p
+        .strip_prefix(root)
+        .unwrap_or(p)
+        .to_string_lossy()
+        .replace('\\', "/");
     if let Some((matcher, has_slash)) = include {
         let matched = if *has_slash {
             matcher.matches(&rel)
@@ -1584,7 +1590,13 @@ fn glob_collect(root: &Path, matcher: &globx::Matcher, cap: usize) -> Vec<String
             continue;
         }
         let p = entry.path();
-        let rel = p.strip_prefix(root).unwrap_or(p).display().to_string();
+        // Emit forward-slash relative paths so output is consistent across
+        // platforms (matches the globx matcher, which normalizes separators).
+        let rel = p
+            .strip_prefix(root)
+            .unwrap_or(p)
+            .to_string_lossy()
+            .replace('\\', "/");
         let name = entry.file_name().to_string_lossy().to_string();
         if matcher.matches(&rel) || matcher.matches(&name) {
             hits.push(rel);

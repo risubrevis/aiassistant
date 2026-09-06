@@ -333,7 +333,7 @@ fn leaf_unresolved(abs: &std::path::Path) -> std::path::PathBuf {
 
 /// Denylist used by unlink semantics (same rules as `validate_path`).
 fn unlink_denylisted(canon: &std::path::Path) -> bool {
-    let s = canon.to_string_lossy().to_lowercase();
+    let s = canon.to_string_lossy().replace('\\', "/").to_lowercase();
     let b = canon
         .file_name()
         .map(|f| f.to_string_lossy().to_lowercase())
@@ -507,7 +507,7 @@ fn validate_path(path: &str, roots: &[std::path::PathBuf]) -> Result<std::path::
             ));
         }
     }
-    let s = canon.to_string_lossy().to_lowercase();
+    let s = canon.to_string_lossy().replace('\\', "/").to_lowercase();
     let b = canon
         .file_name()
         .map(|f| f.to_string_lossy().to_lowercase())
@@ -569,7 +569,8 @@ mod tests {
         let base = tmp("base");
         let p = base.join("a").join("..").join("b");
         let c = lexical_canonicalize(&p);
-        assert!(c.ends_with(base.join("b")), "got {}", c.display());
+        let base_canon = lexical_canonicalize(&base);
+        assert!(c.ends_with(base_canon.join("b")), "got {}", c.display());
         assert!(!c
             .components()
             .any(|x| matches!(x, std::path::Component::ParentDir)));
@@ -642,12 +643,15 @@ mod tests {
         let r = validate_path(&p.to_string_lossy(), std::slice::from_ref(&real));
         assert!(r.is_ok(), "got {:?}", r);
         let c = r.unwrap();
-        // Must resolve to the real target, not the symlink path.
+        // Must resolve to the real target, not the symlink path. Canonicalize
+        // `real` so the comparison holds on macOS, where $TMPDIR (`/var/...`)
+        // resolves to `/private/var/...`.
+        let real_canon = std::fs::canonicalize(&real).unwrap();
         assert!(
-            c.starts_with(&real),
+            c.starts_with(&real_canon),
             "canon {} not under real {}",
             c.display(),
-            real.display()
+            real_canon.display()
         );
         assert!(!c.to_string_lossy().contains("link"));
         let _ = std::fs::remove_dir_all(&root);
