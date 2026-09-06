@@ -1300,6 +1300,14 @@ async fn run_turn(
         ToolRegistry::builtin_for_mode_ctx(&cfg.defaults.mode, in_project, &cross_chat);
     registry.remove_disabled(&cfg.defaults.disabled_tools);
     mcp.add_to_registry(&mut registry, &cfg.defaults.mode).await;
+    if cfg.defaults.mode != "minimal"
+        && crate::db::web_hooks::has_active(&pool)
+            .await
+            .unwrap_or(false)
+    {
+        registry.register(Box::new(crate::tools::builtin::WebHookList));
+        registry.register(Box::new(crate::tools::builtin::WebHookRun));
+    }
     agents::add_to_registry(&mut registry, &agent_contracts, &cfg.defaults.mode);
     if !project_skills.is_empty() {
         registry.register(Box::new(crate::tools::builtin::ConnectSkill::new(

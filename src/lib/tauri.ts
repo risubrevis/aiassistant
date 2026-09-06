@@ -923,6 +923,70 @@ export function onMcpChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("mcp:changed", () => cb());
 }
 
+// --- Web Hooks (DB-backed) ---
+
+export interface WebHookView {
+  id: string;
+  title: string;
+  name: string; // slug, referenced by the model in web_hook_run
+  description: string; // shown to the model in web_hook_list
+  method: string; // "GET" | "POST" | ...
+  url: string; // may contain {{secret}} / {{variables.KEY}} / {{payload}}
+  headers: string; // JSON object as string, e.g. '{"Content-Type":"application/json"}'
+  body_template: string; // empty = raw payload; otherwise template with {{payload}}/{{variables.KEY}}/{{secret}}
+  auth_type: string; // "none" | "bearer" | "basic" | "api_key_header" | "api_key_query"
+  auth_username: string;
+  auth_header_name: string;
+  auth_param_name: string;
+  has_secret: boolean;
+  timeout_ms: number;
+  is_active: boolean;
+  position: number;
+}
+export interface WebHookInput {
+  title: string;
+  name: string;
+  description: string;
+  method: string;
+  url: string;
+  headers: string;
+  body_template: string;
+  auth_type: string;
+  auth_username: string;
+  auth_header_name: string;
+  auth_param_name: string;
+  timeout_ms: number;
+  is_active: boolean;
+}
+export interface WebHookTestResult {
+  ok: boolean;
+  status: number | null;
+  detail: string;
+  elapsed_ms: number;
+  body: string;
+}
+export const webHooksList = () => invoke<WebHookView[]>("web_hooks_list");
+export const webHooksCreate = (input: WebHookInput) =>
+  invoke<void>("web_hooks_create", { input });
+export const webHooksUpdate = (id: string, input: WebHookInput) =>
+  invoke<void>("web_hooks_update", { id, input });
+export const webHooksDelete = (id: string) => invoke<void>("web_hooks_delete", { id });
+export const webHooksReorder = (orderedIds: string[]) =>
+  invoke<void>("web_hooks_reorder", { orderedIds });
+export const webHooksSetActive = (id: string, isActive: boolean) =>
+  invoke<void>("web_hooks_set_active", { id, isActive });
+export const webHooksSetSecret = (id: string, secret: string) =>
+  invoke<void>("web_hooks_set_secret", { id, secret });
+export const webHooksClearSecret = (id: string) =>
+  invoke<void>("web_hooks_clear_secret", { id });
+export const webHooksHasSecret = (id: string) =>
+  invoke<boolean>("web_hooks_has_secret", { id });
+export const webHooksTest = (id: string, payload: string | null) =>
+  invoke<WebHookTestResult>("web_hooks_test", { id, payload });
+export function onWebHooksChanged(cb: () => void): Promise<UnlistenFn> {
+  return listen("web_hooks:changed", () => cb());
+}
+
 // --- Pending changes (snapshot + revert) ---
 
 export type ChangeKind = "created" | "modified" | "deleted";

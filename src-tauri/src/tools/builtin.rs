@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use base64::Engine as _;
 use htmd::HtmlToMarkdown;
 use regex::Regex;
 use serde_json::Value;
@@ -3058,6 +3059,349 @@ impl Tool for WebSearch {
     }
 }
 
+static WEB_HOOK_PLACEHOLDER_RE: std::sync::LazyLock<Option<Regex>> =
+    std::sync::LazyLock::new(|| Regex::new(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}").ok());
+
+/// Render a web hook template. `{{payload}}`, `{{secret}}` and `{{variables.KEY}}`
+/// are substituted; any other placeholder renders as empty so template
+/// scaffolding never leaks into the outgoing request.
+fn render_template(
+    tpl: &str,
+    payload: Option<&str>,
+    variables: Option<&Value>,
+    secret: Option<&str>,
+) -> String {
+    let Some(re) = WEB_HOOK_PLACEHOLDER_RE.as_ref() else {
+        return tpl.to_string();
+    };
+    re.replace_all(tpl, |caps: &regex::Captures| {
+        match caps.get(1).unwrap().as_str() {
+            "payload" => payload.unwrap_or("").to_string(),
+            "secret" => secret.unwrap_or("").to_string(),
+            name if name.starts_with("variables.") => variables
+                .and_then(|v| v.get(&name["variables.".len()..]))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            _ => String::new(),
+        }
+    })
+    .into_owned()
+}
+
+/// Host of the hook URL as configured (placeholders sanitized to `x` before
+/// parsing, so a placeholder in the path/query does not break the parse while
+/// a placeholder in the host yields a sentinel that can never match a real one).
+fn configured_host(raw_url: &str) -> Option<String> {
+    let re = WEB_HOOK_PLACEHOLDER_RE.as_ref()?;
+    let sanitized = re.replace_all(raw_url, "x");
+    reqwest::Url::parse(sanitized.trim())
+        .ok()?
+        .host_str()
+        .map(|h| h.to_lowercase())
+}
+
+fn url_host(url: &str) -> Option<String> {
+    reqwest::Url::parse(url)
+        .ok()?
+        .host_str()
+        .map(|h| h.to_lowercase())
+}
+
+fn rendered_hook_headers(
+    row: &crate::db::web_hooks::WebHookRow,
+    payload: Option<&str>,
+    variables: Option<&Value>,
+    secret: Option<&str>,
+) -> Result<Vec<(String, String)>, String> {
+    if row.headers.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let parsed: serde_json::Map<String, Value> = serde_json::from_str(&row.headers)
+        .map_err(|e| format!("invalid headers JSON for web hook '{}': {e}", row.name))?;
+    Ok(parsed
+        .into_iter()
+        .filter_map(|(k, v)| {
+            v.as_str()
+                .map(|s| (k, render_template(s, payload, variables, secret)))
+        })
+        .collect())
+}
+
+const WEB_HOOK_MAX_BODY: usize = 32 * 1024;
+
+/// Shared HTTP execution for the `web_hook_run` tool and the Settings test
+/// button. Renders URL/headers/body, applies auth (secret from the OS keyring),
+/// sends the request and reads the response body (up to 32KB).
+pub async fn execute_web_hook(
+    row: &crate::db::web_hooks::WebHookRow,
+    payload: Option<&str>,
+    variables: Option<&Value>,
+    extra_headers: Option<&Value>,
+) -> Result<(reqwest::StatusCode, String, String), String> {
+    let secret = crate::secrets::get_webhook_secret(&row.id);
+    let auth_type = row.auth_type.trim().to_lowercase();
+    let needs_secret = matches!(
+        auth_type.as_str(),
+        "bearer" | "basic" | "api_key_header" | "api_key_query"
+    );
+    if needs_secret && secret.is_none() {
+        return Err(format!(
+            "web hook '{}' requires a secret (set it in Settings → Web Hooks)",
+            row.name
+        ));
+    }
+
+    let rendered_url = render_template(&row.url, payload, variables, secret.as_deref());
+    ensure_http_url(&rendered_url)?;
+    let configured = configured_host(&row.url).ok_or_else(|| "invalid hook URL".to_string())?;
+    let final_host = url_host(&rendered_url).ok_or_else(|| "invalid URL".to_string())?;
+    if configured != final_host {
+        return Err("web hook host mismatch: variables must not change the host".into());
+    }
+
+    let mut url = reqwest::Url::parse(&rendered_url).map_err(|e| format!("invalid URL: {e}"))?;
+    if auth_type == "api_key_query" {
+        url.query_pairs_mut()
+            .append_pair(&row.auth_param_name, secret.as_deref().unwrap_or(""));
+    }
+
+    let mut headers = reqwest::header::HeaderMap::new();
+    let reserved_auth_header = match auth_type.as_str() {
+        "bearer" => {
+            let value = reqwest::header::HeaderValue::from_str(&format!(
+                "Bearer {}",
+                secret.as_deref().unwrap_or("")
+            ))
+            .map_err(|e| format!("invalid auth header: {e}"))?;
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+            Some("authorization".to_string())
+        }
+        "basic" => {
+            let creds = format!("{}:{}", row.auth_username, secret.as_deref().unwrap_or(""));
+            let encoded = base64::engine::general_purpose::STANDARD.encode(creds);
+            let value = reqwest::header::HeaderValue::from_str(&format!("Basic {encoded}"))
+                .map_err(|e| format!("invalid auth header: {e}"))?;
+            headers.insert(reqwest::header::AUTHORIZATION, value);
+            Some("authorization".to_string())
+        }
+        "api_key_header" => {
+            let name = row.auth_header_name.trim();
+            if name.is_empty() {
+                return Err(format!(
+                    "web hook '{}' uses api_key_header auth but has no auth_header_name",
+                    row.name
+                ));
+            }
+            let hname = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| format!("invalid auth header name '{name}': {e}"))?;
+            let value = reqwest::header::HeaderValue::from_str(secret.as_deref().unwrap_or(""))
+                .map_err(|e| format!("invalid auth header value: {e}"))?;
+            headers.insert(hname, value);
+            Some(name.to_lowercase())
+        }
+        _ => None,
+    };
+
+    let hook_headers = rendered_hook_headers(row, payload, variables, secret.as_deref())?;
+    for (k, v) in hook_headers.into_iter().chain(
+        extra_headers
+            .and_then(|v| v.as_object())
+            .map(|extra| {
+                extra
+                    .iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+            })
+            .into_iter()
+            .flatten(),
+    ) {
+        if reserved_auth_header
+            .as_deref()
+            .map(|r| k.to_lowercase() == r)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes()) else {
+            continue;
+        };
+        if let Ok(value) = reqwest::header::HeaderValue::from_str(&v) {
+            headers.insert(name, value);
+        }
+    }
+
+    let method = row.method.trim().to_uppercase();
+    let body: Option<String> = if !row.body_template.trim().is_empty() {
+        Some(render_template(
+            &row.body_template,
+            payload,
+            variables,
+            secret.as_deref(),
+        ))
+    } else if matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
+        payload.map(|p| p.to_string())
+    } else {
+        None
+    };
+
+    let timeout_ms = row.timeout_ms.max(1000) as u64;
+    let client = crate::net::apply(
+        reqwest::Client::builder().timeout(std::time::Duration::from_millis(timeout_ms)),
+    )
+    .build()
+    .unwrap_or_else(|_| reqwest::Client::new());
+
+    let mut req = match method.as_str() {
+        "GET" => client.get(url),
+        "POST" => client.post(url),
+        "PUT" => client.put(url),
+        "PATCH" => client.patch(url),
+        "DELETE" => client.delete(url),
+        "HEAD" => client.head(url),
+        other => return Err(format!("unsupported HTTP method: {other}")),
+    };
+    req = req.headers(headers);
+    if let Some(b) = body {
+        req = req.body(b);
+    }
+
+    let mut resp = match tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms + 5000),
+        req.send(),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(format!("request failed: {e}")),
+        Err(_) => return Err("request timed out".into()),
+    };
+    let status = resp.status();
+    let ctype = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let (bytes, _) = read_body_limited(&mut resp, WEB_HOOK_MAX_BODY).await?;
+    let body = String::from_utf8_lossy(&bytes).into_owned();
+    Ok((status, ctype, body))
+}
+
+/// List user-configured web hooks so the model knows what it can call.
+pub struct WebHookList;
+
+#[async_trait]
+impl Tool for WebHookList {
+    fn category(&self) -> super::ToolCategory {
+        super::ToolCategory::Readonly
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "web_hook_list".into(),
+            description: "List user-configured web hooks (Settings → Web Hooks) available to call via web_hook_run. Returns each hook's name, HTTP method, description and the payload it expects. No network call.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        }
+    }
+    async fn execute(&self, _args: Value) -> ToolResult {
+        let Some(pool) = crate::tools::db_pool() else {
+            return ToolResult::ok("No web hooks configured.");
+        };
+        let hooks = crate::db::web_hooks::list_active(pool)
+            .await
+            .unwrap_or_default();
+        if hooks.is_empty() {
+            return ToolResult::ok("No web hooks configured.");
+        }
+        let mut out = String::from("Web hooks (call via web_hook_run with `name`):\n");
+        for h in &hooks {
+            let desc = if h.description.trim().is_empty() {
+                "<no description>"
+            } else {
+                h.description.trim()
+            };
+            out.push_str(&format!("- {} [{}]: {}\n", h.name, h.method, desc));
+        }
+        out.push_str("Pass `payload` (string) and optional `variables` (object) to web_hook_run. If the hook has a body_template, it is rendered with {{payload}} and {{variables.KEY}}; otherwise payload is sent as the raw body.");
+        super::truncate_text(&mut out, 8000);
+        ToolResult::ok(out)
+    }
+}
+
+/// Invoke a user-configured web hook by name.
+pub struct WebHookRun;
+
+#[async_trait]
+impl Tool for WebHookRun {
+    fn category(&self) -> super::ToolCategory {
+        super::ToolCategory::Network
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "web_hook_run".into(),
+            description: "Invoke a user-configured web hook by name (see web_hook_list). Sends an HTTP request to the preconfigured endpoint with auth from the OS keyring. The URL/headers/body_template are defined in Settings → Web Hooks; pass `payload` (string) and optional `variables` (object) to fill template placeholders. Requires user approval.".into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Hook name (slug) from web_hook_list." },
+                    "payload": { "type": "string", "description": "Main content to send (rendered into {{payload}} or used as raw body)." },
+                    "variables": { "type": "object", "description": "Named values for {{variables.KEY}} placeholders in URL/headers/body_template.", "additionalProperties": { "type": "string" } },
+                    "headers": { "type": "object", "description": "Extra request headers (cannot override the hook's auth header).", "additionalProperties": { "type": "string" } }
+                },
+                "required": ["name"]
+            }),
+        }
+    }
+    async fn execute(&self, args: Value) -> ToolResult {
+        let Some(name) = arg_str(&args, "name") else {
+            return ToolResult::err("missing 'name'");
+        };
+        let Some(pool) = crate::tools::db_pool() else {
+            return ToolResult::err("web hooks unavailable");
+        };
+        let row = match crate::db::web_hooks::get_by_name(pool, name).await {
+            Ok(Some(r)) => r,
+            Ok(None) => return ToolResult::err(format!("unknown web hook: {name}")),
+            Err(e) => return ToolResult::err(e.to_string()),
+        };
+        if row.is_active == 0 {
+            return ToolResult::err(format!("web hook '{name}' is inactive"));
+        }
+        let payload = arg_str(&args, "payload");
+        let variables = args.get("variables");
+        let extra_headers = args.get("headers");
+        match execute_web_hook(&row, payload, variables, extra_headers).await {
+            Ok((status, ctype, body)) => {
+                if !status.is_success() {
+                    let mut snippet = body.trim().to_string();
+                    super::truncate_text(&mut snippet, 2000);
+                    let mut msg = format!("HTTP {}", status.as_u16());
+                    if !snippet.is_empty() {
+                        msg.push('\n');
+                        msg.push_str(&snippet);
+                    }
+                    return ToolResult::err(msg);
+                }
+                if body.trim().is_empty() {
+                    return ToolResult::ok(format!("HTTP {} (empty body)", status.as_u16()));
+                }
+                let mut out = format!("HTTP {}", status.as_u16());
+                if !ctype.is_empty() {
+                    out.push_str(&format!("\nContent-Type: {ctype}"));
+                }
+                out.push('\n');
+                out.push_str(&body);
+                super::truncate_text(&mut out, 16000);
+                ToolResult::ok(out)
+            }
+            Err(e) => ToolResult::err(e),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5434,5 +5778,73 @@ mod tests {
             "missing second result, got: {md_results:?}"
         );
         assert!(md_results.len() >= 2, "got: {md_results:?}");
+    }
+
+    #[tokio::test]
+    async fn web_hook_list_empty_without_db() {
+        let r = WebHookList.execute(json!({})).await;
+        assert!(!r.is_error);
+        assert!(r.content.contains("No web hooks configured"));
+    }
+
+    #[tokio::test]
+    async fn web_hook_run_missing_name() {
+        let r = WebHookRun.execute(json!({})).await;
+        assert!(r.is_error);
+        assert!(r.content.contains("missing 'name'"));
+    }
+
+    #[tokio::test]
+    async fn web_hook_run_unavailable_without_db() {
+        let r = WebHookRun.execute(json!({ "name": "anything" })).await;
+        assert!(r.is_error);
+        assert!(r.content.contains("web hooks unavailable"));
+    }
+
+    #[test]
+    fn render_template_substitutes_payload_variables_secret() {
+        let vars = json!({ "id": "42" });
+        assert_eq!(
+            render_template(
+                "https://x.test/{{variables.id}}?p={{payload}}&s={{secret}}",
+                Some("hello"),
+                Some(&vars),
+                Some("sk-1")
+            ),
+            "https://x.test/42?p=hello&s=sk-1"
+        );
+    }
+
+    #[test]
+    fn render_template_missing_and_unknown_render_empty() {
+        let vars = json!({ "a": "1" });
+        assert_eq!(
+            render_template("{{variables.b}}", None, Some(&vars), None),
+            ""
+        );
+        assert_eq!(render_template("{{unknown}}", Some("x"), None, None), "");
+        assert_eq!(render_template("{{payload}}", None, None, None), "");
+        assert_eq!(render_template("{{secret}}", None, None, None), "");
+    }
+
+    #[test]
+    fn configured_host_parses_with_placeholders() {
+        assert_eq!(
+            configured_host("https://api.example.com/hooks/{{variables.id}}").as_deref(),
+            Some("api.example.com")
+        );
+        assert_eq!(configured_host("{{variables.host}}/x"), None);
+        assert_eq!(configured_host("not a url"), None);
+    }
+
+    #[test]
+    fn host_lock_rejects_variable_host() {
+        let raw = "https://{{variables.host}}/api";
+        let vars = json!({ "host": "evil.example.com" });
+        let rendered = render_template(raw, None, Some(&vars), None);
+        assert_ne!(
+            configured_host(raw).as_deref(),
+            url_host(&rendered).as_deref()
+        );
     }
 }

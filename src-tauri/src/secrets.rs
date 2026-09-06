@@ -81,3 +81,42 @@ pub fn delete_proxy_password() -> Result<()> {
         Err(e) => Err(anyhow::anyhow!(e)),
     }
 }
+
+/// OS keychain entry for a web hook secret (Settings → Web Hooks).
+fn webhook_entry(id: &str) -> Option<keyring::Entry> {
+    keyring::Entry::new("aiassistant", &format!("webhook:{id}")).ok()
+}
+
+pub fn get_webhook_secret(id: &str) -> Option<String> {
+    let entry = match webhook_entry(id) {
+        Some(e) => e,
+        None => {
+            warn!("keychain unavailable for webhook:{id}");
+            return None;
+        }
+    };
+    match entry.get_password() {
+        Ok(v) if !v.is_empty() => Some(v),
+        Ok(_) => None,
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            warn!("failed to read keyring for webhook:{id}: {e}");
+            None
+        }
+    }
+}
+
+pub fn set_webhook_secret(id: &str, secret: &str) -> Result<()> {
+    let entry = webhook_entry(id).ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    entry.set_password(secret)?;
+    Ok(())
+}
+
+pub fn delete_webhook_secret(id: &str) -> Result<()> {
+    let entry = webhook_entry(id).ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    match entry.delete_credential() {
+        Ok(_) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e)),
+    }
+}

@@ -1681,6 +1681,162 @@ async fn web_search_providers_save(
 }
 
 #[tauri::command]
+async fn web_hooks_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<db::web_hooks::WebHookView>, String> {
+    db::web_hooks::list_views(&state.pool)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn web_hooks_create(
+    input: db::web_hooks::WebHookInput,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if input.name.trim().is_empty() {
+        return Err("web hook name must not be empty".into());
+    }
+    if db::web_hooks::get_by_name(&state.pool, &input.name)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Err(format!("web hook '{}' already exists", input.name));
+    }
+    db::web_hooks::create(&state.pool, input)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("web_hooks:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn web_hooks_update(
+    id: String,
+    input: db::web_hooks::WebHookInput,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if input.name.trim().is_empty() {
+        return Err("web hook name must not be empty".into());
+    }
+    if let Some(existing) = db::web_hooks::get_by_name(&state.pool, &input.name)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        if existing.id != id {
+            return Err(format!("web hook '{}' already exists", input.name));
+        }
+    }
+    db::web_hooks::update(&state.pool, &id, input)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("web_hooks:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn web_hooks_delete(
+    id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let _ = crate::secrets::delete_webhook_secret(&id);
+    db::web_hooks::delete(&state.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("web_hooks:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn web_hooks_reorder(
+    ordered_ids: Vec<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    db::web_hooks::reorder(&state.pool, &ordered_ids)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("web_hooks:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn web_hooks_set_active(
+    id: String,
+    is_active: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    db::web_hooks::set_active(&state.pool, &id, is_active)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = app.emit("web_hooks:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn web_hooks_set_secret(
+    id: String,
+    secret: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    crate::secrets::set_webhook_secret(&id, &secret).map_err(|e| e.to_string())?;
+    db::web_hooks::set_has_secret(&state.pool, &id, true)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn web_hooks_clear_secret(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    crate::secrets::delete_webhook_secret(&id).map_err(|e| e.to_string())?;
+    db::web_hooks::set_has_secret(&state.pool, &id, false)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn web_hooks_has_secret(id: String) -> Result<bool, String> {
+    Ok(crate::secrets::get_webhook_secret(&id).is_some())
+}
+
+#[tauri::command]
+async fn web_hooks_test(
+    id: String,
+    payload: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<db::web_hooks::WebHookTestResult, String> {
+    let row = db::web_hooks::get(&state.pool, &id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("web hook not found: {id}"))?;
+    let start = std::time::Instant::now();
+    match crate::tools::builtin::execute_web_hook(&row, payload.as_deref(), None, None).await {
+        Ok((status, _ctype, body)) => {
+            let mut body_out = body;
+            crate::tools::truncate_text(&mut body_out, 4000);
+            Ok(db::web_hooks::WebHookTestResult {
+                ok: status.is_success(),
+                status: Some(status.as_u16()),
+                detail: format!("HTTP {}", status.as_u16()),
+                elapsed_ms: start.elapsed().as_millis() as u64,
+                body: body_out,
+            })
+        }
+        Err(e) => Ok(db::web_hooks::WebHookTestResult {
+            ok: false,
+            status: None,
+            detail: e,
+            elapsed_ms: start.elapsed().as_millis() as u64,
+            body: String::new(),
+        }),
+    }
+}
+
+#[tauri::command]
 async fn rules_list(
     scope: String,
     scope_id: String,
@@ -2662,6 +2818,16 @@ pub fn run() {
             global_rules_save,
             web_search_providers_list,
             web_search_providers_save,
+            web_hooks_list,
+            web_hooks_create,
+            web_hooks_update,
+            web_hooks_delete,
+            web_hooks_reorder,
+            web_hooks_set_active,
+            web_hooks_set_secret,
+            web_hooks_clear_secret,
+            web_hooks_has_secret,
+            web_hooks_test,
             skills_list,
             skills_save,
             search_messages,

@@ -10,6 +10,7 @@ pub mod project_tasks;
 pub mod prompts;
 pub mod providers;
 pub mod tasks;
+pub mod web_hooks;
 
 #[cfg(test)]
 mod tests;

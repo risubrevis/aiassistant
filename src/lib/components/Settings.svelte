@@ -24,6 +24,7 @@
   import SettingsAgents from "./SettingsAgents.svelte";
   import SettingsPrompts from "./SettingsPrompts.svelte";
   import SettingsWebSearch from "./SettingsWebSearch.svelte";
+  import SettingsWebHooks from "./SettingsWebHooks.svelte";
   import SettingsSkills from "./SettingsSkills.svelte";
   import SettingsNetwork from "./SettingsNetwork.svelte";
   import SettingsLogs from "./SettingsLogs.svelte";
@@ -38,6 +39,7 @@
     { id: "agents", label: m.settings_tab_agents() },
     { id: "prompts", label: m.settings_tab_prompts() },
     { id: "web_search", label: m.settings_tab_web_search() },
+    { id: "web_hooks", label: m.settings_tab_web_hooks() },
     { id: "skills", label: m.settings_tab_skills() },
     { id: "appearance", label: m.settings_tab_appearance() },
     { id: "network", label: m.settings_tab_network() },
@@ -164,6 +166,8 @@
       <SettingsPrompts />
     {:else if $settingsTab === "web_search"}
       <SettingsWebSearch />
+    {:else if $settingsTab === "web_hooks"}
+      <SettingsWebHooks />
     {:else if $settingsTab === "skills"}
       <SettingsSkills />
     {:else}
