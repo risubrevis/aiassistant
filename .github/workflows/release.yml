@@ -86,7 +86,7 @@ jobs:
           pacman -Syu --noconfirm --needed \
             base-devel git rust nodejs npm \
             webkit2gtk-4.1 gtk3 librsvg libsoup3 \
-            javascriptcoregtk-4.1 file patchelf github-cli
+            file patchelf github-cli
 
       - name: Checkout
         uses: actions/checkout@v7

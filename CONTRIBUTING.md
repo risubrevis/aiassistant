@@ -37,7 +37,7 @@ sudo apt-get install -y \
 # Arch Linux
 sudo pacman -S --needed \
   webkit2gtk-4.1 gtk3 libayatana-appindicator3 librsvg libsoup3 \
-  javascriptcoregtk-4.1 base-devel
+  base-devel
 
 # Fedora
 sudo dnf install -y \
