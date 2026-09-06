@@ -1,0 +1,431 @@
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::SqlitePool;
+
+use crate::config::{EventSchema, GlobalRule, Skill};
+use crate::db::models;
+
+async fn setup() -> SqlitePool {
+    let opts = SqliteConnectOptions::new()
+        .filename(":memory:")
+        .create_if_missing(true)
+        .foreign_keys(true);
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1) // single connection so :memory: is shared across queries
+        .connect_with(opts)
+        .await
+        .expect("connect :memory:");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("migrate");
+    pool
+}
+
+// `table` is only ever passed a hard-coded literal at call sites.
+async fn count(pool: &SqlitePool, table: &str) -> i64 {
+    let q = format!("SELECT COUNT(*) FROM {table}");
+    sqlx::query_scalar(&q).fetch_one(pool).await.unwrap()
+}
+
+#[tokio::test]
+async fn delete_chat_cleans_all_related_rows() {
+    let pool = setup().await;
+    let now: i64 = 1700000000;
+
+    sqlx::query("INSERT INTO chats (id, project_id, title, provider_id, model_id, created_at, updated_at) VALUES ('c1', NULL, 't', 'p', 'm', ?1, ?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO messages (id, chat_id, parent_id, role, content, model, usage, is_branch_root, created_at) VALUES ('m1','c1',NULL,'user','hi',NULL,NULL,0,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO messages (id, chat_id, parent_id, role, content, model, usage, is_branch_root, created_at) VALUES ('m2','c1','m1','assistant','ok','m','{\"prompt_tokens\":10,\"completion_tokens\":20,\"total_tokens\":30}',0,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // tool_calls has no FK to chats; cleaned explicitly by delete_chat.
+    sqlx::query("INSERT INTO tool_calls (id, chat_id, message_id, tool_name, source, status, started_at) VALUES ('tc1','c1','m2','read','builtin','done',?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    // rules has no FK either.
+    sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES ('r1','chat','c1','rule',1,0,?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO chat_paths (id, chat_id, path, kind, watch, created_at) VALUES ('cp1','c1','/x','dir',0,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO agent_runs (id, chat_id, parent_id, agent_connection_id, subtask_index, subtask_prompt, cwd, status, created_at) VALUES ('ar1','c1','','a',0,'p','/x','done',?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO agent_sessions (id, chat_id, agent_connection_id, agent_session_id, created_at, updated_at) VALUES ('as1','c1','a','s',?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO chat_sessions (id, chat_id, summary, boundary_message_id, token_count, created_at) VALUES ('cs1','c1','sum','m1',5,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO attachments (id, chat_id, message_id, file_name, mime_type, file_size, storage_path, is_image, created_at) VALUES ('at1','c1','m2','f.txt','text/plain',10,'/x/f',0,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(count(&pool, "chats").await, 1);
+    assert_eq!(count(&pool, "messages").await, 2);
+    assert_eq!(count(&pool, "tool_calls").await, 1);
+
+    crate::db::models::delete_chat(&pool, "c1").await.unwrap();
+
+    assert_eq!(count(&pool, "chats").await, 0);
+    assert_eq!(count(&pool, "messages").await, 0);
+    assert_eq!(count(&pool, "tool_calls").await, 0);
+    assert_eq!(count(&pool, "rules").await, 0);
+    assert_eq!(count(&pool, "chat_paths").await, 0);
+    assert_eq!(count(&pool, "agent_runs").await, 0);
+    assert_eq!(count(&pool, "agent_sessions").await, 0);
+    assert_eq!(count(&pool, "chat_sessions").await, 0);
+    assert_eq!(count(&pool, "attachments").await, 0);
+
+    let fts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages_fts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(fts, 0);
+}
+
+#[tokio::test]
+async fn delete_project_cascades_to_chats_and_all_data() {
+    let pool = setup().await;
+    let now: i64 = 1700000000;
+
+    sqlx::query("INSERT INTO projects (id, name, description, system_prompt, color, created_at, updated_at) VALUES ('proj','P','','','x',?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_paths (id, project_id, path, kind, watch, created_at) VALUES ('pp1','proj','/proj','dir',1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES ('pr1','project','proj','prule',1,0,?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    for cid in ["cA", "cB"] {
+        sqlx::query("INSERT INTO chats (id, project_id, title, provider_id, model_id, created_at, updated_at) VALUES (?1,'proj','t','p','m',?2,?2)")
+            .bind(cid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let mid = format!("{cid}_m1");
+        sqlx::query("INSERT INTO messages (id, chat_id, role, content, is_branch_root, created_at) VALUES (?1,?2,'assistant','x',0,?3)")
+            .bind(&mid)
+            .bind(cid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO tool_calls (id, chat_id, message_id, tool_name, source, status, started_at) VALUES (?1,?2,?3,'t','builtin','done',?4)")
+            .bind(format!("{cid}_tc"))
+            .bind(cid)
+            .bind(&mid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES (?1,'chat',?2,'cr',1,0,?3,?3)")
+            .bind(format!("{cid}_r"))
+            .bind(cid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO chat_paths (id, chat_id, path, kind, watch, created_at) VALUES (?1,?2,'/x','dir',0,?3)")
+            .bind(format!("{cid}_cp"))
+            .bind(cid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO agent_runs (id, chat_id, parent_id, agent_connection_id, subtask_index, subtask_prompt, cwd, status, created_at) VALUES (?1,?2,'','a',0,'p','/x','done',?3)")
+            .bind(format!("{cid}_ar"))
+            .bind(cid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO chat_sessions (id, chat_id, summary, boundary_message_id, token_count, created_at) VALUES (?1,?2,'s',?3,1,?4)")
+            .bind(format!("{cid}_cs"))
+            .bind(cid)
+            .bind(&mid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO attachments (id, chat_id, message_id, file_name, mime_type, file_size, storage_path, is_image, created_at) VALUES (?1,?2,?3,'f','t',1,'/x',0,?4)")
+            .bind(format!("{cid}_at"))
+            .bind(cid)
+            .bind(&mid)
+            .bind(now)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    // Standalone chat outside the project — must survive the delete.
+    sqlx::query("INSERT INTO chats (id, project_id, title, provider_id, model_id, created_at, updated_at) VALUES ('cOut',NULL,'out','p','m',?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(count(&pool, "chats").await, 3);
+    assert_eq!(count(&pool, "projects").await, 1);
+
+    crate::db::models::delete_project(&pool, "proj")
+        .await
+        .unwrap();
+
+    assert_eq!(count(&pool, "projects").await, 0);
+    assert_eq!(count(&pool, "project_paths").await, 0);
+    assert_eq!(
+        count(&pool, "rules").await,
+        0,
+        "both project and chat rules must be gone"
+    );
+    assert_eq!(
+        count(&pool, "chats").await,
+        1,
+        "only the standalone chat remains"
+    );
+    assert_eq!(count(&pool, "messages").await, 0);
+    assert_eq!(count(&pool, "tool_calls").await, 0);
+    assert_eq!(count(&pool, "chat_paths").await, 0);
+    assert_eq!(count(&pool, "agent_runs").await, 0);
+    assert_eq!(count(&pool, "agent_sessions").await, 0);
+    assert_eq!(count(&pool, "chat_sessions").await, 0);
+    assert_eq!(count(&pool, "attachments").await, 0);
+
+    let fts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages_fts")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(fts, 0);
+
+    let out: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chats WHERE id='cOut'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(out, 1);
+}
+
+#[tokio::test]
+async fn foreign_keys_pragma_is_enabled() {
+    let pool = setup().await;
+    let on: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(on, 1);
+}
+
+#[tokio::test]
+async fn skills_save_list_roundtrip() {
+    let pool = setup().await;
+
+    models::save_skills(
+        &pool,
+        &[Skill {
+            id: "s1".into(),
+            title: "T".into(),
+            body: "B".into(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let skills = models::list_skills(&pool).await.unwrap();
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].id, "s1");
+    assert_eq!(skills[0].title, "T");
+    assert_eq!(skills[0].body, "B");
+
+    models::save_skills(&pool, &[]).await.unwrap();
+    let skills = models::list_skills(&pool).await.unwrap();
+    assert!(skills.is_empty());
+    assert_eq!(count(&pool, "skills").await, 0);
+}
+
+#[tokio::test]
+async fn global_rules_replace_and_list() {
+    let pool = setup().await;
+
+    models::replace_global_rules(
+        &pool,
+        &[GlobalRule {
+            title: "r".into(),
+            text: "x".into(),
+            enabled: true,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let rules = models::list_global_rules(&pool).await.unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].title, "r");
+    assert_eq!(rules[0].text, "x");
+    assert!(rules[0].enabled);
+
+    models::replace_global_rules(
+        &pool,
+        &[
+            GlobalRule {
+                title: "a".into(),
+                text: "x".into(),
+                enabled: true,
+            },
+            GlobalRule {
+                title: "b".into(),
+                text: "y".into(),
+                enabled: false,
+            },
+        ],
+    )
+    .await
+    .unwrap();
+    let rules = models::list_global_rules(&pool).await.unwrap();
+    assert_eq!(rules.len(), 2);
+
+    // Project/chat rules must be untouched by global replacement.
+    let now: i64 = 1700000000;
+    sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES ('pr1','project','proj','prule',1,0,?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    models::replace_global_rules(&pool, &[]).await.unwrap();
+    let rules = models::list_global_rules(&pool).await.unwrap();
+    assert!(rules.is_empty());
+    assert_eq!(count(&pool, "rules").await, 1);
+}
+
+#[tokio::test]
+async fn agents_crud_roundtrip() {
+    use crate::db::agents::{self, AgentInput};
+
+    let pool = setup().await;
+    let input = AgentInput {
+        name: "First".into(),
+        description: "desc".into(),
+        default_model: "m1".into(),
+        capabilities: vec!["code_edit".into()],
+        command: "claude".into(),
+        args: vec!["-m".into(), "{model}".into(), "{prompt}".into()],
+        prompt_mode: "stdin_json".into(),
+        env: std::collections::HashMap::from([("K".into(), "v".into())]),
+        output_format: "stream_json".into(),
+        event_schema: Some(EventSchema {
+            text_key: Some("text".into()),
+            ..Default::default()
+        }),
+        mode_flags: std::collections::HashMap::from([("plan".into(), vec!["--plan".into()])]),
+        resume_flag: "--session {session}".into(),
+        timeout_ms: 60_000,
+        max_turns: 10,
+        ..Default::default()
+    };
+    let first = agents::create(&pool, input).await.unwrap();
+    assert_eq!(first.name, "First");
+    assert_eq!(first.default_model, "m1");
+    assert_eq!(first.capabilities, vec!["code_edit".to_string()]);
+    assert_eq!(
+        first.args,
+        vec![
+            "-m".to_string(),
+            "{model}".to_string(),
+            "{prompt}".to_string()
+        ]
+    );
+    assert_eq!(first.env.get("K").map(|s| s.as_str()), Some("v"));
+    assert_eq!(
+        first.mode_flags.get("plan").map(|v| v.as_slice()),
+        Some(["--plan".to_string()].as_slice())
+    );
+    assert_eq!(
+        first
+            .event_schema
+            .as_ref()
+            .and_then(|s| s.text_key.as_deref()),
+        Some("text")
+    );
+    assert_eq!(first.timeout_ms, 60_000);
+    assert_eq!(first.max_turns, 10);
+    assert!(first.is_active);
+    assert_eq!(first.position, 1);
+
+    let second = agents::create(
+        &pool,
+        AgentInput {
+            name: "Second".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(second.position, 2);
+
+    agents::reorder(&pool, &[second.id.clone(), first.id.clone()])
+        .await
+        .unwrap();
+    let all = agents::list(&pool).await.unwrap();
+    assert_eq!(
+        all.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+        [second.id.as_str(), first.id.as_str()]
+    );
+    assert_eq!(all[0].position, 0);
+
+    agents::set_active(&pool, &first.id, false).await.unwrap();
+    let active = agents::list_active(&pool).await.unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, second.id);
+
+    let updated = agents::update(
+        &pool,
+        &second.id,
+        AgentInput {
+            name: "Renamed".into(),
+            default_model: "gpt-5".into(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.name, "Renamed");
+    let contract = updated.to_contract();
+    assert_eq!(contract.id, second.id);
+    assert_eq!(contract.default_model, "gpt-5");
+
+    agents::delete(&pool, &first.id).await.unwrap();
+    assert!(agents::get(&pool, &first.id).await.unwrap().is_none());
+    assert_eq!(count(&pool, "agents").await, 1);
+}

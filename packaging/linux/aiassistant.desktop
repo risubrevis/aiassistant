@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=AI Assistant
+GenericName=LLM Chat & Code Assistant
+Comment=Provider-agnostic desktop app for chatting with LLMs and working on code projects
+Exec=aiassistant
+Icon=aiassistant
+Terminal=false
+Categories=Utility;Office;Development;
+Keywords=LLM;AI;Chat;Assistant;Code;
+StartupNotify=true
+StartupWMClass=Aiassistant

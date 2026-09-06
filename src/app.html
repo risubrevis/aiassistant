@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%sveltekit.assets%/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Assistant</title>
+    <script>
+      // Best-effort early theme guess to prevent a white flash on first paint;
+      // the real theme from config is applied later by applyTheme().
+      try {
+        if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.classList.add("dark");
+        }
+      } catch {
+        // matchMedia unavailable — fall through, applyTheme() will fix it later.
+      }
+    </script>
+    <style>
+      #app-preloader {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--background, #ffffff);
+        transition: opacity 0.2s ease;
+      }
+      #app-preloader.fade-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #app-preloader .preloader-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+      }
+      #app-preloader .preloader-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: var(--radius-md, 10px);
+      }
+      #app-preloader .preloader-spinner {
+        width: 22px;
+        height: 22px;
+        box-sizing: border-box;
+        border: 2px solid var(--muted, rgba(0, 0, 0, 0.15));
+        border-top-color: var(--foreground, #1a1a1a);
+        border-radius: 50%;
+        animation: preloader-spin 0.8s linear infinite;
+      }
+      @keyframes preloader-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div id="app-preloader" aria-hidden="true">
+      <div class="preloader-card">
+        <img class="preloader-icon" src="%sveltekit.assets%/favicon.png" alt="" />
+        <div class="preloader-spinner"></div>
+      </div>
+    </div>
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>

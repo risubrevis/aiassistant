@@ -1,0 +1,37 @@
+# Maintainer: AIAssistant <noreply@example.com>
+#
+# Prebuilt-binary variant (fast install, no Rust/Node toolchain needed):
+#   cd packaging/arch
+#   makepkg -p PKGBUILD-bin -f
+#   sudo pacman -U aiassistant-1.0.0-1-x86_64.pkg.tar.zst
+#
+# For the from-source build, use the regular PKGBUILD instead.
+
+pkgname=aiassistant
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Provider-agnostic desktop app for chatting with LLMs and working on code projects (Tauri 2 + SvelteKit)"
+arch=('x86_64')
+url="https://github.com/aiassistant/AIAssistant"
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme')
+source=("aiassistant-bin-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  install -Dm755 "aiassistant" "$pkgdir/usr/bin/aiassistant"
+
+  install -Dm644 "aiassistant.desktop" \
+    "$pkgdir/usr/share/applications/aiassistant.desktop"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+
+  local icons="icons"
+  install -Dm644 "$icons/32x32.png"      "$pkgdir/usr/share/icons/hicolor/32x32/apps/aiassistant.png"
+  install -Dm644 "$icons/64x64.png"      "$pkgdir/usr/share/icons/hicolor/64x64/apps/aiassistant.png"
+  install -Dm644 "$icons/128x128.png"    "$pkgdir/usr/share/icons/hicolor/128x128/apps/aiassistant.png"
+  install -Dm644 "$icons/128x128@2x.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/aiassistant.png"
+  install -Dm644 "$icons/icon.png"       "$pkgdir/usr/share/icons/hicolor/512x512/apps/aiassistant.png"
+}

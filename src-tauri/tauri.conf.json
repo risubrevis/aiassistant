@@ -1,0 +1,60 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AI Assistant",
+  "version": "1.0.0",
+  "identifier": "com.aiassistant.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AI Assistant",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 720,
+        "minHeight": 480,
+        "decorations": true,
+        "transparent": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "section": "utils",
+        "desktopTemplate": "templates/desktop.template"
+      },
+      "rpm": {
+        "desktopTemplate": "templates/desktop.template"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2MUE0QjQ4MkI4RTQ5QkQKUldTOVNZNHJTRXNhaGdadVVMYWtLakpueWNaZFdmTThrdUl0Y1JWb3lvRS9QcUIyS0xabWwzWDkK",
+      "endpoints": [
+        "https://github.com/risubrevis/aiassistant/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

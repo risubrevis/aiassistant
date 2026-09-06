@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name={{name}}
+GenericName=LLM Chat & Code Assistant
+Comment={{comment}}
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Categories=Utility;Office;Development;
+Keywords=LLM;AI;Chat;Assistant;Code;
+StartupNotify=true
+StartupWMClass=Aiassistant

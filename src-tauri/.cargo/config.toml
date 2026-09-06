@@ -1,0 +1,15 @@
+[target.x86_64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.aarch64-unknown-linux-gnu]
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+# Fast release: no LTO (bundled sqlite3-sys + proc-macro link issue under -flto),
+# full parallelism, stripped symbols, no debuginfo.
+[profile.release]
+debug = "none"
+strip = "symbols"
+lto = false
+codegen-units = 16

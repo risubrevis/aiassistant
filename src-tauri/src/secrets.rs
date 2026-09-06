@@ -1,0 +1,83 @@
+use anyhow::Result;
+use tracing::warn;
+
+/// OS keychain entry name for a provider API key (docs/01, docs/09).
+fn entry(ref_id: &str) -> Option<keyring::Entry> {
+    keyring::Entry::new("aiassistant", &format!("provider:{ref_id}")).ok()
+}
+
+/// Read a provider API key from the OS keychain. Returns `None` if no key is
+/// stored or the keychain is unavailable (e.g. headless / no daemon). For
+/// keyless endpoints (Ollama) this is the expected path.
+pub fn get_api_key(ref_id: &str) -> Option<String> {
+    let entry = match entry(ref_id) {
+        Some(e) => e,
+        None => {
+            warn!("keychain unavailable for provider:{ref_id}");
+            return None;
+        }
+    };
+    match entry.get_password() {
+        Ok(v) if !v.is_empty() => Some(v),
+        Ok(_) => None,
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            warn!("failed to read keyring for provider:{ref_id}: {e}");
+            None
+        }
+    }
+}
+
+pub fn set_api_key(ref_id: &str, key: &str) -> Result<()> {
+    let entry = entry(ref_id).ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    entry.set_password(key)?;
+    Ok(())
+}
+
+pub fn delete_api_key(ref_id: &str) -> Result<()> {
+    let entry = entry(ref_id).ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    match entry.delete_credential() {
+        Ok(_) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e)),
+    }
+}
+
+/// OS keychain entry for the outbound proxy password (Settings → Network).
+fn proxy_entry() -> Option<keyring::Entry> {
+    keyring::Entry::new("aiassistant", "network:proxy").ok()
+}
+
+pub fn get_proxy_password() -> Option<String> {
+    let entry = match proxy_entry() {
+        Some(e) => e,
+        None => {
+            warn!("keychain unavailable for network:proxy");
+            return None;
+        }
+    };
+    match entry.get_password() {
+        Ok(v) if !v.is_empty() => Some(v),
+        Ok(_) => None,
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            warn!("failed to read keyring for network:proxy: {e}");
+            None
+        }
+    }
+}
+
+pub fn set_proxy_password(pw: &str) -> Result<()> {
+    let entry = proxy_entry().ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    entry.set_password(pw)?;
+    Ok(())
+}
+
+pub fn delete_proxy_password() -> Result<()> {
+    let entry = proxy_entry().ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    match entry.delete_credential() {
+        Ok(_) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e)),
+    }
+}

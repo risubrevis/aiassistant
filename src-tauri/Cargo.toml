@@ -1,0 +1,72 @@
+[package]
+name = "aiassistant"
+version = "1.0.0"
+description = "Provider-agnostic desktop app for chatting with LLMs and working on code projects."
+authors = ["AIAssistant"]
+edition = "2021"
+license = "GPL-3.0-or-later"
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "aiassistant_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-os = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+toml = "0.8"
+toml_edit = "0.22"
+dirs = "5"
+notify = "7"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-appender = "0.2"
+tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "process"] }
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "system-proxy", "socks"] }
+futures = "0.3"
+eventsource-stream = "0.2"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "gif", "bmp", "webp"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "uuid", "macros"] }
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+keyring = "3"
+regex = "1"
+htmd = "0.5"
+similar = "2"
+portable-pty = "0.8"
+# Recursive directory walker that respects .gitignore/.ignore (used by `grep`).
+ignore = "0.4"
+# Cross-platform trash (FreeDesktop/Linux, macOS, Windows recycle bin) for delete_path.
+trash = "5.2.6"
+# Robust recursive dir removal (handles Windows read-only/non-atomic edge cases
+# better than std::fs::remove_dir_all); used only on real directories.
+remove_dir_all = "1.0.0"
+# Cross-platform system info (OS/kernel/CPU/memory/disks) for the env-info prompt.
+sysinfo = "0.32"
+
+# File picker. On Linux route through the XDG Desktop Portal so the dialog is
+# native to the running DE (Qt on KDE, GTK on GNOME) instead of a hard GTK
+# dialog; Windows/macOS keep their default native backends.
+[target.'cfg(target_os = "linux")'.dependencies]
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
+
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+tauri-plugin-dialog = "2"

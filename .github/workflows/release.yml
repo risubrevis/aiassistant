@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, e.g. v1.2.0 (the workflow builds the current ref and publishes it under this tag)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish-tauri:
+    name: Build & sign (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Setup Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux system dependencies (Tauri)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build app, sign bundles and upload to draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          releaseName: "AI Assistant ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          releaseBody: 'See the assets to download and install this version.'
+          releaseDraft: true
+          prerelease: false
+          generateReleaseNotes: true
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
+
+  build-arch:
+    name: Build Arch Linux package
+    needs: publish-tauri
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install prerequisites
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git rust nodejs npm \
+            webkit2gtk-4.1 gtk3 librsvg libsoup3 \
+            javascriptcoregtk-4.1 file patchelf github-cli
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Build release binary
+        run: npm run tauri build -- --no-bundle
+
+      - name: Get version
+        id: version
+        run: |
+          echo "VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' src-tauri/tauri.conf.json)" >> $GITHUB_OUTPUT
+
+      - name: Build Arch package
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          cd packaging/arch
+          sed -i "s/^pkgver=.*/pkgver=$VERSION/" PKGBUILD-bin
+          # Stage files for PKGBUILD-bin (same layout as the manual process in AGENTS.md)
+          STAGE=$(mktemp -d)/aiassistant-$VERSION
+          mkdir -p "$STAGE/icons"
+          cp ../../src-tauri/target/release/aiassistant "$STAGE/aiassistant"
+          cp ../linux/aiassistant.desktop "$STAGE/aiassistant.desktop"
+          cp ../../LICENSE "$STAGE/LICENSE"
+          cp ../../src-tauri/icons/{32x32,64x64,128x128,128x128@2x,icon}.png "$STAGE/icons/"
+          tar -C "$(dirname $STAGE)" -czf aiassistant-bin-$VERSION.tar.gz aiassistant-$VERSION
+          # makepkg refuses to run as root
+          useradd -m -s /bin/bash builder
+          chown -R builder:builder .
+          su builder -c "cd $(pwd) && makepkg -p PKGBUILD-bin -f"
+
+      - name: Remove debug package (not needed in releases)
+        run: rm -f packaging/arch/*debug*.pkg.tar.zst
+
+      - name: Upload Arch package to the draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: gh release upload "$TAG" --clobber packaging/arch/aiassistant-*.pkg.tar.zst

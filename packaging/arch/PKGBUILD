@@ -1,0 +1,63 @@
+# Maintainer: AIAssistant <noreply@example.com>
+#
+# Build & install:
+#   cd packaging/arch
+#   makepkg -f            # produces aiassistant-<ver>-<rel>-x86_64.pkg.tar.zst
+#   sudo pacman -U aiassistant-*.pkg.tar.zst
+#
+# This PKGBUILD builds AIAssistant from a release source tarball. For a -git
+# variant, replace `source` with a git+https://... URL and use `pkgver()`.
+
+pkgname=aiassistant
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Provider-agnostic desktop app for chatting with LLMs and working on code projects (Tauri 2 + SvelteKit)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/aiassistant/AIAssistant"
+license=('GPL-3.0-or-later')
+depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme' 'xdg-desktop-portal')
+makedepends=('rust' 'nodejs' 'npm')
+optdepends=(
+  'xdg-desktop-portal-kde: native Qt file dialog on KDE'
+  'xdg-desktop-portal-gtk: native GTK file dialog on GNOME/XFCE'
+  'xdg-desktop-portal-wlr: file dialog on wlroots/WMs'
+  'zenity: fallback file dialog when no portal backend is available'
+)
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+  cd "$srcdir/$pkgname-$pkgver"
+  # Strip LTO from C/linker flags: the bundled sqlite3 (libsqlite3-sys) is a C
+  # archive; under makepkg's `-flto=auto` it becomes LLVM bitcode that the Rust
+  # proc-macro dylib linker (run without -flto) cannot resolve, producing
+  # `undefined symbol: sqlite3_*` at proc-macro load. Rust LTO is not enabled.
+  export CFLAGS="${CFLAGS//-flto=auto/}"
+  export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
+  export LDFLAGS="${LDFLAGS//-flto=auto/}"
+  npm install --no-audit --no-fund
+  npm run tauri build -- --no-bundle
+}
+
+package() {
+  cd "$srcdir/$pkgname-$pkgver"
+
+  # Main binary
+  install -Dm755 "src-tauri/target/release/aiassistant" \
+    "$pkgdir/usr/bin/aiassistant"
+
+  # Desktop entry (shows up in KDE/GNOME app menus)
+  install -Dm644 "packaging/linux/aiassistant.desktop" \
+    "$pkgdir/usr/share/applications/aiassistant.desktop"
+
+  # License
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE" 2>/dev/null || true
+
+  # Hicolor theme icons (used by app menus, taskbars and window title bars)
+  local icons="src-tauri/icons"
+  install -Dm644 "$icons/32x32.png"      "$pkgdir/usr/share/icons/hicolor/32x32/apps/aiassistant.png"
+  install -Dm644 "$icons/64x64.png"      "$pkgdir/usr/share/icons/hicolor/64x64/apps/aiassistant.png"
+  install -Dm644 "$icons/128x128.png"    "$pkgdir/usr/share/icons/hicolor/128x128/apps/aiassistant.png"
+  install -Dm644 "$icons/128x128@2x.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/aiassistant.png"
+  install -Dm644 "$icons/icon.png"       "$pkgdir/usr/share/icons/hicolor/512x512/apps/aiassistant.png"
+}
