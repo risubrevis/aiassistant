@@ -4,13 +4,30 @@
   import { relaunch } from "@tauri-apps/plugin-process";
   import { getVersion } from "@tauri-apps/api/app";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { RefreshCw, Download, Loader, ExternalLink, Check } from "@lucide/svelte";
+  import { RefreshCw, Download, Loader, ExternalLink, Check, Copy, Globe, GitFork } from "@lucide/svelte";
   import * as ipc from "$lib/tauri";
   import { m } from "$lib/i18n";
 
   const FALLBACK_VERSION = "1.0.0";
   const RELEASES_URL = "https://github.com/risubrevis/aiassistant/releases/latest";
   const MIB = 1048576;
+  const WEBSITE_URL = "https://agnostic-ai-assistant.com/";
+  const REPO_URL = "https://github.com/risubrevis/aiassistant";
+
+  type PaymentMethod = { id: string; name: string; address: string; url?: string };
+
+  const FIAT_METHODS: PaymentMethod[] = [
+    { id: "donatello", name: "Donatello", address: "https://donatello.to/risubrevis", url: "https://donatello.to/risubrevis" },
+    { id: "paypal", name: "PayPal", address: "https://paypal.me/risubrevis", url: "https://paypal.me/risubrevis" },
+  ];
+  const CRYPTO_METHODS: PaymentMethod[] = [
+    { id: "ton", name: "TON (GRAM)", address: "UQARfS0xURhiGBLZ6_EYdSBJSMynLqAb_ktcoPHeCWNZ9RYs" },
+    { id: "btc", name: "Bitcoin (BTC)", address: "bc1qcptl4v8ccywn5azf8ah9lcwc7af0df765je5yh" },
+    { id: "eth", name: "Ethereum (ETH)", address: "0x2CDe86E15E955d8490EBC6b18e8c2567a4E412Ab" },
+    { id: "xmr", name: "Monero (XMR)", address: "88uPgR4mV8DekYWDAXsKpxgCn7LWkVJQtjko1dKzFX2G8rZGg9qqFLdcdDC14aoKiRUv8HDgHN1mp8eAvV95dPmb1EgHg2m" },
+    { id: "usdt-trc20", name: "USDT (Tron, TRC-20)", address: "TGWVREi6ogYDDcykoRhURK9QSAah2GYLh3" },
+    { id: "usdt-solana", name: "USDT (Solana, SPL)", address: "CU3BCQmH7TTXNzZzAdhMXzGQwyD2Gnjw4" },
+  ];
 
   let paths = $state<ipc.AppPaths | null>(null);
   let currentVersion = $state(FALLBACK_VERSION);
@@ -26,11 +43,27 @@
   let downloaded = $state(0);
   let installing = $state(false);
   let error = $state<string | null>(null);
+  let copiedId = $state<string | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | null = null;
 
   function formatDate(date?: string): string {
     if (!date) return "";
     const ms = Date.parse(date);
     return Number.isNaN(ms) ? date : new Date(ms).toLocaleDateString();
+  }
+
+  async function copyToClipboard(id: string, text: string) {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      copiedId = id;
+      if (copyTimer) clearTimeout(copyTimer);
+      copyTimer = setTimeout(() => {
+        copiedId = null;
+      }, 1500);
+    } catch (e) {
+      console.error("clipboard write failed", e);
+    }
   }
 
   async function checkForUpdates() {
@@ -112,6 +145,18 @@
   });
 </script>
 
+{#snippet copyBtn(id: string, text: string)}
+  <button
+    class="icon-btn"
+    type="button"
+    title={copiedId === id ? m.settings_about_copied() : m.settings_about_copy()}
+    aria-label={copiedId === id ? m.settings_about_copied() : m.settings_about_copy()}
+    onclick={() => void copyToClipboard(id, text)}
+  >
+    {#if copiedId === id}<Check size={13} />{:else}<Copy size={13} />{/if}
+  </button>
+{/snippet}
+
 <div class="about">
   <div class="name">{m.app_name()}</div>
   <div class="desc">{m.settings_about_description()}</div>
@@ -121,6 +166,74 @@
       <span class="label">{m.settings_about_version()}</span>
       <span class="value">{currentVersion}</span>
     </div>
+  </div>
+
+  <div class="section-heading">{m.settings_about_public_sources()}</div>
+  <div class="rows">
+    <div class="row copyable">
+      <span class="label"><Globe size={13} /> {m.settings_about_public_website()}</span>
+      <a
+        class="value link mono"
+        href={WEBSITE_URL}
+        title={WEBSITE_URL}
+        onclick={(e) => {
+          e.preventDefault();
+          void openUrl(WEBSITE_URL);
+        }}
+      >{WEBSITE_URL}</a>
+      {@render copyBtn("website", WEBSITE_URL)}
+    </div>
+    <div class="row copyable">
+      <span class="label"><GitFork size={13} /> {m.settings_about_public_repository()}</span>
+      <a
+        class="value link mono"
+        href={REPO_URL}
+        title={REPO_URL}
+        onclick={(e) => {
+          e.preventDefault();
+          void openUrl(REPO_URL);
+        }}
+      >{REPO_URL}</a>
+      {@render copyBtn("repo", REPO_URL)}
+    </div>
+  </div>
+
+  <div class="section-heading">{m.settings_about_sponsors()}</div>
+  <div class="sponsors-intro">
+    <p>{m.settings_about_sponsors_intro()}</p>
+    <p>{m.settings_about_sponsors_usage()}</p>
+  </div>
+  <div class="sponsors-subheading">{m.settings_about_sponsors_fiat()}</div>
+  <div class="rows">
+    {#each FIAT_METHODS as method (method.id)}
+      <div class="row copyable">
+        <span class="label">{method.name}</span>
+        <a
+          class="value link mono"
+          href={method.url}
+          title={method.url}
+          onclick={(e) => {
+            e.preventDefault();
+            if (method.url) void openUrl(method.url);
+          }}
+        >{method.address}</a>
+        {@render copyBtn(method.id, method.address)}
+      </div>
+    {/each}
+  </div>
+  <div class="sponsors-subheading">{m.settings_about_sponsors_crypto()}</div>
+  <div class="rows">
+    {#each CRYPTO_METHODS as method (method.id)}
+      <div class="row copyable">
+        <span class="label">{method.name}</span>
+        <span class="value mono" title={method.address}>{method.address}</span>
+        {@render copyBtn(method.id, method.address)}
+      </div>
+    {/each}
+  </div>
+
+  <div class="section-heading">{m.settings_about_data_storage()}</div>
+  <div class="rows">
     <div class="row">
       <span class="label">{m.settings_about_config_path()}</span>
       <span class="value mono" title={paths?.config_path ?? ""}>{paths?.config_path ?? "—"}</span>
@@ -135,9 +248,10 @@
     </div>
   </div>
 
+  <div class="section-heading">{m.settings_about_updates()}</div>
   <div class="updates">
-    <div class="row">
-      <span class="title">{m.settings_about_updates()}</span>
+    <div class="updates-top">
+      <div class="hint">{m.settings_about_updates_description()}</div>
       <button
         class="chip"
         onclick={() => void checkForUpdates()}
@@ -147,7 +261,6 @@
         {m.settings_about_updates_check()}
       </button>
     </div>
-    <div class="hint">{m.settings_about_updates_description()}</div>
 
     {#if checking}
       <div class="status muted">{m.settings_about_updates_checking()}</div>
@@ -249,7 +362,6 @@
   .desc {
     font-size: 0.8125rem;
     color: var(--muted-foreground);
-    max-width: 46ch;
   }
   .rows {
     display: flex;
@@ -291,19 +403,6 @@
     padding: 0.625rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-  }
-  .updates .row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    padding: 0;
-    font-size: 0.8125rem;
-  }
-  .title {
-    font-weight: 500;
-    font-size: 0.8125rem;
   }
   .chip {
     display: inline-flex;
@@ -447,7 +546,6 @@
   }
   .note {
     font-size: 0.6875rem;
-    max-width: 60ch;
   }
   @keyframes spin-anim {
     to {
@@ -461,5 +559,73 @@
     100% {
       transform: translateX(250%);
     }
+  }
+
+  .section-heading {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    margin-top: 0.25rem;
+  }
+  .sponsors-intro {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .sponsors-intro p {
+    margin: 0;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--muted-foreground);
+  }
+  .sponsors-subheading {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted-foreground);
+    margin-top: 0.25rem;
+  }
+  .row.copyable {
+    align-items: center;
+  }
+  .row.copyable .value {
+    flex: 1;
+  }
+  .row.copyable .label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .link {
+    color: hsl(210 90% 50%);
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .link:hover {
+    text-decoration: underline;
+  }
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    color: var(--muted-foreground);
+    cursor: default;
+  }
+  .icon-btn:hover {
+    background: var(--accent);
+    color: var(--foreground);
+  }
+  .updates-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
   }
 </style>
