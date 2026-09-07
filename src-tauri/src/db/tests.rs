@@ -3,6 +3,7 @@ use sqlx::SqlitePool;
 
 use crate::config::{EventSchema, GlobalRule, Skill};
 use crate::db::models;
+use crate::db::providers::{merge_provider_models, ProviderModelInput};
 
 async fn setup() -> SqlitePool {
     let opts = SqliteConnectOptions::new()
@@ -450,4 +451,124 @@ async fn agents_crud_roundtrip() {
     agents::delete(&pool, &first.id).await.unwrap();
     assert!(agents::get(&pool, &first.id).await.unwrap().is_none());
     assert_eq!(count(&pool, "agents").await, 1);
+}
+
+#[tokio::test]
+async fn merge_provider_models_preserves_ids_and_cleans_refs() {
+    let pool = setup().await;
+    let now: i64 = 1700000000;
+
+    sqlx::query(
+        "INSERT INTO providers (id, name, kind, base_url, api_key_ref, extra_headers, timeout_ms, \
+         is_active, position, created_at, updated_at) \
+         VALUES ('prov1', 'Prov', 'openai', 'http://localhost', '', '{}', 30000, 1, 0, ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO provider_models (id, provider_id, name, display_name, enabled, alias, \
+         capabilities, context_window, created_at, updated_at) \
+         VALUES ('m1', 'prov1', 'glm-5.2', 'Old GLM', 1, '', '[]', 0, ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO provider_models (id, provider_id, name, display_name, enabled, alias, \
+         capabilities, context_window, created_at, updated_at) \
+         VALUES ('m2', 'prov1', 'gemma4', 'Gemma', 1, '', '[]', 0, ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO models_cache (id, provider_id, name, context_window, meta, fetched_at) \
+         VALUES ('prov1::gemma4', 'prov1', 'gemma4', NULL, NULL, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chats (id, project_id, title, provider_id, model_id, created_at, updated_at) \
+         VALUES ('c1', NULL, 't', 'prov1', 'm1', ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO chats (id, project_id, title, provider_id, model_id, created_at, updated_at) \
+         VALUES ('c2', NULL, 't2', 'prov1', 'm2', ?1, ?1)",
+    )
+    .bind(now)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let input = [
+        ProviderModelInput {
+            name: "glm-5.2".into(),
+            display_name: "GLM".into(),
+            enabled: true,
+            alias: String::new(),
+            capabilities: vec![],
+            context_window: 0,
+        },
+        ProviderModelInput {
+            name: "kimi-k3".into(),
+            display_name: "Kimi".into(),
+            enabled: true,
+            alias: String::new(),
+            capabilities: vec![],
+            context_window: 0,
+        },
+    ];
+    let deleted = merge_provider_models(&pool, "prov1", &input).await.unwrap();
+
+    assert_eq!(deleted.len(), 1);
+    assert!(deleted.contains(&"m2".to_string()));
+
+    let (id, display_name): (String, String) = sqlx::query_as(
+        "SELECT id, display_name FROM provider_models WHERE name = 'glm-5.2' AND provider_id = 'prov1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(id, "m1");
+    assert_eq!(display_name, "GLM");
+
+    assert_eq!(
+        count(
+            &pool,
+            "provider_models WHERE name = 'kimi-k3' AND provider_id = 'prov1'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count(&pool, "provider_models WHERE name = 'gemma4'").await,
+        0
+    );
+    assert_eq!(count(&pool, "models_cache WHERE name = 'gemma4'").await, 0);
+
+    let (model_id, provider_id): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT model_id, provider_id FROM chats WHERE id = 'c1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(model_id.as_deref(), Some("m1"));
+    assert_eq!(provider_id.as_deref(), Some("prov1"));
+
+    let (model_id, provider_id): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT model_id, provider_id FROM chats WHERE id = 'c2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(model_id, None);
+    assert_eq!(provider_id.as_deref(), Some("prov1"));
 }

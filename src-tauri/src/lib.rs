@@ -2311,11 +2311,44 @@ async fn provider_models_save(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    db::providers::replace_provider_models(&state.pool, &provider_id, &models)
+    let deleted = db::providers::merge_provider_models(&state.pool, &provider_id, &models)
         .await
         .map_err(|e| e.to_string())?;
+    let mut config_changed = false;
+    if !deleted.is_empty() {
+        let stale_fields: Vec<&'static str> = {
+            let r = state.config.read().unwrap();
+            [
+                ("main_model", r.defaults.main_model.as_ref()),
+                ("secondary_model", r.defaults.secondary_model.as_ref()),
+                ("embedding_model", r.defaults.embedding_model.as_ref()),
+            ]
+            .into_iter()
+            .filter(|(_, mr)| mr.is_some_and(|m| deleted.contains(&m.model)))
+            .map(|(field, _)| field)
+            .collect()
+        };
+        for field in stale_fields.iter().copied() {
+            config::write_defaults_model_ref(field, None).map_err(|e| e.to_string())?;
+            config_changed = true;
+        }
+        if config_changed {
+            let mut w = state.config.write().unwrap();
+            for field in stale_fields {
+                match field {
+                    "main_model" => w.defaults.main_model = None,
+                    "secondary_model" => w.defaults.secondary_model = None,
+                    "embedding_model" => w.defaults.embedding_model = None,
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
     app.emit("providers:changed", ())
         .map_err(|e| e.to_string())?;
+    if config_changed {
+        app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

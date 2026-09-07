@@ -9,8 +9,10 @@
     ArrowDown,
     RefreshCw,
     Check,
+    Brain,
   } from "@lucide/svelte";
   import { m } from "$lib/i18n";
+  import { toast } from "$lib/stores/toasts";
   import {
     providersList,
     providersCreate,
@@ -59,12 +61,20 @@
   let formApiKey = $state("");
   let formTimeout = $state(30000);
   let formActive = $state(true);
-  let rows = $state<Row[]>([]);
   let editingApiKeyRef = $state("");
   let editingHeaders = $state<Record<string, string>>({});
 
   let testing = $state(false);
   let saving = $state(false);
+
+  let modelsModalOpen = $state(false);
+  let modelsProviderId = $state<string | null>(null);
+  let modelsProviderName = $state("");
+  let modelRows = $state<Row[]>([]);
+  let modelsSaving = $state(false);
+  let modelsError = $state("");
+  let modelsTesting = $state(false);
+  let modelsTestInfo = $state("");
 
   let canSaveProvider = $derived(formName.trim().length > 0 && formBaseUrl.trim().length > 0);
   let modalTitle = $derived(
@@ -139,7 +149,6 @@
     formActive = true;
     editingApiKeyRef = "";
     editingHeaders = {};
-    rows = [];
     modalError = "";
     testInfo = "";
     modalOpen = true;
@@ -155,27 +164,9 @@
     formActive = p.is_active;
     editingApiKeyRef = p.api_key_ref;
     editingHeaders = p.extra_headers ?? {};
-    rows = [];
     modalError = "";
     testInfo = "";
     modalOpen = true;
-    void loadRows(p.id);
-  }
-
-  async function loadRows(id: string) {
-    try {
-      const list = await providerModelsList(id);
-      rows = list.map((pm) => ({
-        name: pm.name,
-        display_name: pm.display_name || pm.name,
-        enabled: pm.enabled,
-        alias: pm.alias,
-        capabilities: pm.capabilities ?? [],
-        context_window: pm.context_window ?? 0,
-      }));
-    } catch (e) {
-      modalError = String(e);
-    }
   }
 
   async function testAndFetch() {
@@ -196,20 +187,40 @@
         editingApiKeyRef = created.api_key_ref;
         formApiKey = "";
       }
-      const models = await providerModelsFetch(id);
-      const byName = new Map(rows.map((r) => [r.name, r]));
-      rows = models.map((mm: ModelInfo) => {
+      const fetched = await providerModelsFetch(id);
+      const existing = await providerModelsList(id);
+      const byName = new Map(existing.map((pm) => [pm.name, pm]));
+      const beforeNames = new Set(existing.map((pm) => pm.name));
+      const fetchedNames = new Set(fetched.map((mm: ModelInfo) => mm.name));
+      const added = [...fetchedNames].filter((n) => !beforeNames.has(n)).length;
+      const removed = [...beforeNames].filter((n) => !fetchedNames.has(n)).length;
+      const merged = fetched.map((mm: ModelInfo) => {
         const ex = byName.get(mm.name);
         return {
           name: mm.name,
-          display_name: ex?.display_name ?? mm.name,
+          display_name: ex?.display_name || mm.name,
           enabled: ex?.enabled ?? true,
           alias: ex?.alias ?? "",
           capabilities: ex?.capabilities ?? [],
           context_window: mm.context_window ?? ex?.context_window ?? 0,
         };
       });
-      testInfo = `OK — ${rows.length} model(s)`;
+      await providerModelsSave(
+        id,
+        merged.map((r) => ({
+          name: r.name,
+          display_name: r.display_name.trim() || r.name,
+          enabled: r.enabled,
+          alias: r.alias,
+          capabilities: r.capabilities,
+          context_window: r.context_window,
+        })),
+      );
+      const summary = `OK — ${merged.length} model(s)${
+        added || removed ? ` (+${added} new, −${removed} removed)` : ""
+      }`;
+      testInfo = summary;
+      toast.success(m.settings_providers_fetch_done(), summary);
       void load();
     } catch (e) {
       modalError = String(e);
@@ -233,17 +244,6 @@
       } else {
         await providersUpdate(id, formInput(), formApiKey || undefined);
       }
-      await providerModelsSave(
-        id,
-        rows.map((r) => ({
-          name: r.name,
-          display_name: r.display_name.trim() || r.name,
-          enabled: r.enabled,
-          alias: r.alias,
-          capabilities: r.capabilities,
-          context_window: r.context_window,
-        })),
-      );
       modalOpen = false;
       await load();
     } catch (e) {
@@ -295,7 +295,100 @@
 
   function closeModals() {
     modalOpen = false;
+    modelsModalOpen = false;
     deleteId = null;
+  }
+
+  function openModels(p: ProviderRow) {
+    modelsProviderId = p.id;
+    modelsProviderName = p.name;
+    modelRows = [];
+    modelsError = "";
+    modelsTestInfo = "";
+    modelsModalOpen = true;
+    void loadModelRows(p.id);
+  }
+
+  async function loadModelRows(id: string) {
+    try {
+      const list = await providerModelsList(id);
+      modelRows = list.map((pm) => ({
+        name: pm.name,
+        display_name: pm.display_name || pm.name,
+        enabled: pm.enabled,
+        alias: pm.alias,
+        capabilities: pm.capabilities ?? [],
+        context_window: pm.context_window ?? 0,
+      }));
+    } catch (e) {
+      modelsError = String(e);
+    }
+  }
+
+  async function saveModels() {
+    if (!modelsProviderId) return;
+    modelsSaving = true;
+    modelsError = "";
+    try {
+      await providerModelsSave(
+        modelsProviderId,
+        modelRows.map((r) => ({
+          name: r.name,
+          display_name: r.display_name.trim() || r.name,
+          enabled: r.enabled,
+          alias: r.alias,
+          capabilities: r.capabilities,
+          context_window: r.context_window,
+        })),
+      );
+      modelsModalOpen = false;
+      toast.success(m.settings_providers_models_saved());
+      void load();
+    } catch (e) {
+      modelsError = String(e);
+      toast.error(m.settings_providers_models_save_failed(), String(e));
+    } finally {
+      modelsSaving = false;
+    }
+  }
+
+  async function fetchModels() {
+    if (!modelsProviderId) return;
+    modelsTesting = true;
+    modelsError = "";
+    modelsTestInfo = "";
+    try {
+      const fetched = await providerModelsFetch(modelsProviderId);
+      const byName = new Map(modelRows.map((r) => [r.name, r]));
+      const beforeNames = new Set(modelRows.map((r) => r.name));
+      const fetchedNames = new Set(fetched.map((mm: ModelInfo) => mm.name));
+      const added = [...fetchedNames].filter((n) => !beforeNames.has(n)).length;
+      const removed = [...beforeNames].filter((n) => !fetchedNames.has(n)).length;
+      modelRows = fetched.map((mm: ModelInfo) => {
+        const ex = byName.get(mm.name);
+        return {
+          name: mm.name,
+          display_name: ex?.display_name || mm.name,
+          enabled: ex?.enabled ?? true,
+          alias: ex?.alias ?? "",
+          capabilities: ex?.capabilities ?? [],
+          context_window: mm.context_window ?? ex?.context_window ?? 0,
+        };
+      });
+      const summary = `OK — ${modelRows.length} model(s)${
+        added || removed ? ` (+${added} new, −${removed} removed)` : ""
+      }`;
+      modelsTestInfo = summary;
+      toast.success(m.settings_providers_fetch_done(), summary);
+    } catch (e) {
+      modelsError = String(e);
+    } finally {
+      modelsTesting = false;
+    }
+  }
+
+  function closeModelsModal() {
+    modelsModalOpen = false;
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -346,6 +439,13 @@
               onclick={() => void move(i, 1)}
             >
               <ArrowDown size={13} />
+            </button>
+            <button
+              class="icon-btn"
+              title={m.settings_providers_models_title()}
+              onclick={() => openModels(p)}
+            >
+              <Brain size={13} />
             </button>
             <button class="icon-btn" title={m.common_edit()} onclick={() => openEdit(p)}>
               <Pencil size={13} />
@@ -416,23 +516,6 @@
         </button>
         {#if testInfo}<div class="ok"><Check size={12} /> {testInfo}</div>{/if}
 
-        {#if rows.length}
-          <div class="table">
-            <div class="th">
-              <span>API name</span>
-              <span>Display name</span>
-              <span class="c">Visible</span>
-            </div>
-            {#each rows as r (r.name)}
-              <div class="tr">
-                <span class="api">{r.name}</span>
-                <input bind:value={r.display_name} />
-                <input class="c" type="checkbox" bind:checked={r.enabled} />
-              </div>
-            {/each}
-          </div>
-        {/if}
-
         {#if modalError}<div class="err">{modalError}</div>{/if}
       </div>
       <footer class="foot">
@@ -444,6 +527,61 @@
           onclick={() => void saveProvider()}
         >
           {saving ? "Saving…" : m.common_save()}
+        </button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
+{#if modelsModalOpen}
+  <div class="overlay" role="presentation" onkeydown={onKeydown}>
+    <div
+      class="dialog wide"
+      role="dialog"
+      tabindex="-1"
+      onclick={(e) => e.stopPropagation()}
+      onkeydown={onKeydown}
+    >
+      <header class="head">
+        <span class="head-title"
+          >{m.settings_providers_models_title()} — {modelsProviderName}</span
+        >
+        <button class="x" title={m.common_close()} onclick={closeModelsModal}><X size={14} /></button>
+      </header>
+      <div class="body">
+        <button class="btn" onclick={() => void fetchModels()} disabled={modelsTesting}>
+          <RefreshCw size={12} /> {modelsTesting ? "Testing…" : "Test and fetch available models"}
+        </button>
+        {#if modelsTestInfo}<div class="ok"><Check size={12} /> {modelsTestInfo}</div>{/if}
+        {#if modelRows.length}
+          <div class="table">
+            <div class="th">
+              <span>API name</span>
+              <span>Display name</span>
+              <span class="c">Visible</span>
+            </div>
+            {#each modelRows as r (r.name)}
+              <div class="tr">
+                <span class="api">{r.name}</span>
+                <input bind:value={r.display_name} />
+                <input class="c" type="checkbox" bind:checked={r.enabled} />
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="empty">{m.settings_providers_empty()}</div>
+        {/if}
+        {#if modelsError}<div class="err">{modelsError}</div>{/if}
+      </div>
+      <footer class="foot">
+        <span class="spacer"></span>
+        <button class="btn" onclick={closeModelsModal}>{m.common_cancel()}</button>
+        <button
+          class="btn primary"
+          disabled={!modelRows.length || modelsSaving}
+          onclick={() => void saveModels()}
+        >
+          {modelsSaving ? "Saving…" : m.common_save()}
         </button>
       </footer>
     </div>

@@ -321,39 +321,77 @@ pub async fn list_provider_models(
     Ok(rows.into_iter().map(Into::into).collect())
 }
 
-/// Replace all saved models of a provider (delete + insert with new ids).
-pub async fn replace_provider_models(
+/// Merge saved models of a provider by API name: rows with a known `name` are
+/// updated in place (id preserved), unknown names are inserted, and rows whose
+/// `name` is absent from the input are removed. Returns the ids of removed
+/// models so the caller can clean dangling references.
+pub async fn merge_provider_models(
     pool: &SqlitePool,
     provider_id: &str,
     models: &[ProviderModelInput],
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let now = now_ms();
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM provider_models WHERE provider_id = ?1")
-        .bind(provider_id)
-        .execute(&mut *tx)
-        .await?;
+    let existing: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, id FROM provider_models WHERE provider_id = ?1")
+            .bind(provider_id)
+            .fetch_all(&mut *tx)
+            .await?;
+    let mut existing_by_name: HashMap<String, String> = existing.into_iter().collect();
     for m in models {
-        sqlx::query(
-            "INSERT INTO provider_models \
-             (id, provider_id, name, display_name, enabled, alias, capabilities, context_window, \
-              created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
-        )
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(provider_id)
-        .bind(&m.name)
-        .bind(&m.display_name)
-        .bind(if m.enabled { 1 } else { 0 })
-        .bind(&m.alias)
-        .bind(serde_json::to_string(&m.capabilities).unwrap_or_else(|_| "[]".into()))
-        .bind(m.context_window as i64)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+        if let Some(id) = existing_by_name.remove(&m.name) {
+            sqlx::query(
+                "UPDATE provider_models SET display_name = ?1, enabled = ?2, alias = ?3, \
+                 capabilities = ?4, context_window = ?5, updated_at = ?6 WHERE id = ?7",
+            )
+            .bind(&m.display_name)
+            .bind(if m.enabled { 1 } else { 0 })
+            .bind(&m.alias)
+            .bind(serde_json::to_string(&m.capabilities).unwrap_or_else(|_| "[]".into()))
+            .bind(m.context_window as i64)
+            .bind(now)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query(
+                "INSERT INTO provider_models \
+                 (id, provider_id, name, display_name, enabled, alias, capabilities, context_window, \
+                  created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            )
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(provider_id)
+            .bind(&m.name)
+            .bind(&m.display_name)
+            .bind(if m.enabled { 1 } else { 0 })
+            .bind(&m.alias)
+            .bind(serde_json::to_string(&m.capabilities).unwrap_or_else(|_| "[]".into()))
+            .bind(m.context_window as i64)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    // Whatever is left in the map was not in the input: removed from the provider.
+    let removed: Vec<(String, String)> = existing_by_name.into_iter().collect();
+    for (name, id) in &removed {
+        sqlx::query("DELETE FROM models_cache WHERE provider_id = ?1 AND name = ?2")
+            .bind(provider_id)
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE chats SET model_id = NULL WHERE model_id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM provider_models WHERE id = ?1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
     }
     tx.commit().await?;
-    Ok(())
+    Ok(removed.into_iter().map(|(_, id)| id).collect())
 }
 
 pub async fn get_model(pool: &SqlitePool, model_id: &str) -> Result<Option<ProviderModel>> {
