@@ -205,10 +205,10 @@
             {#if thinkingCopyText}
               <div class="think-text">{thinkingCopyText}</div>
             {/if}
-            {#each intermediateTextBlocks as b (b.id)}
+            {#each intermediateTextBlocks as b, i (i + ":" + (b.id ?? i))}
               <div class="prose prose-sm">{@html renderMarkdown(b.text ?? "")}</div>
             {/each}
-            {#each allTools as b (b.id)}
+            {#each allTools as b, i (i + ":" + (b.id ?? i))}
               {@render toolEntry(b)}
             {/each}
           </div>
@@ -216,7 +216,7 @@
       </div>
     {/if}
 
-    {#each answerTextBlocks as b (b.id)}
+    {#each answerTextBlocks as b, i (i + ":" + (b.id ?? i))}
       <div class="prose">{@html renderMarkdown(b.text ?? "")}</div>
     {/each}
     {#if anyStreaming && answerTextBlocks.length > 0}

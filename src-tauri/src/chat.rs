@@ -1558,14 +1558,14 @@ async fn run_turn(
         let mut blocks_arr: Vec<serde_json::Value> = Vec::new();
         if !thinking_acc.is_empty() {
             blocks_arr.push(serde_json::json!({
-                "id": "block-thinking",
+                "id": format!("{}-thinking", &assistant_id),
                 "type": "thinking",
                 "text": thinking_acc,
             }));
         }
         if !text_acc.is_empty() {
             blocks_arr.push(serde_json::json!({
-                "id": "block-text",
+                "id": format!("{}-text", &assistant_id),
                 "type": "text",
                 "text": text_acc,
             }));
