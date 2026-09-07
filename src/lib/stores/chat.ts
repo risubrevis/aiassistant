@@ -438,12 +438,26 @@ function ensureAssistant(chatId: string, messageId: string): UiMessage {
 }
 
 export function applyBlockStart(e: ipc.BlockStartEvent) {
+  const before = get(messagesByChat)[e.chat_id] ?? [];
+  const existed = before.some((x) => x.id === e.message_id);
   ensureAssistant(e.chat_id, e.message_id);
   messagesByChat.update((m) => {
     const list = m[e.chat_id] ?? [];
-    const idx = list.findIndex((x) => x.id === e.message_id);
+    let base = list;
+    // New assistant iteration started → previous iterations in this turn are done streaming.
+    if (!existed) {
+      const hasStreaming = list.some((x) => x.id !== e.message_id && x.role === "assistant" && x.streaming);
+      if (hasStreaming) {
+        base = list.map((x) =>
+          x.id !== e.message_id && x.role === "assistant" && x.streaming
+            ? { ...x, streaming: false }
+            : x,
+        );
+      }
+    }
+    const idx = base.findIndex((x) => x.id === e.message_id);
     if (idx < 0) return m;
-    const msg = list[idx];
+    const msg = base[idx];
     if (msg.blocks.some((b) => b.id === e.block_id)) return m;
     const block: ContentBlock =
       e.block_type === "tool_use"
@@ -456,7 +470,7 @@ export function applyBlockStart(e: ipc.BlockStartEvent) {
             status: "running",
           }
         : { id: e.block_id, type: e.block_type, text: "" };
-    const next = [...list];
+    const next = [...base];
     next[idx] = { ...msg, blocks: [...msg.blocks, block] };
     return { ...m, [e.chat_id]: next };
   });

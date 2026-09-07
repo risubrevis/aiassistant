@@ -8,12 +8,13 @@
   import { configGet, setMode, setCommandToggle, setEditToggle, chatContextWindow, type Chat, type ChatSession } from "$lib/tauri";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
-  import { marked } from "marked";
+  import { renderMarkdown } from "$lib/markdown";
   import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
+  import AssistantTurn from "./AssistantTurn.svelte";
   import Composer from "./Composer.svelte";
-  import PendingPanel from "./PendingPanel.svelte";
+  import InteractionOverlay from "./InteractionOverlay.svelte";
   import ContextPanel from "./ContextPanel.svelte";
   import AgentPanel from "./AgentPanel.svelte";
   import AgentRunModal from "./AgentRunModal.svelte";
@@ -70,6 +71,31 @@
   });
 
   let messages = $derived(($messagesByChat[chat.id] ?? []) as UiMessage[]);
+
+  type RenderItem =
+    | { key: string; kind: "assistant"; messages: UiMessage[] }
+    | { key: string; kind: "single"; message: UiMessage };
+
+  let renderItems = $derived.by<RenderItem[]>(() => {
+    const items: RenderItem[] = [];
+    let buf: UiMessage[] = [];
+    const flush = () => {
+      if (buf.length) {
+        items.push({ key: "a:" + buf[0].id, kind: "assistant", messages: buf });
+        buf = [];
+      }
+    };
+    for (const msg of messages) {
+      if (msg.role === "assistant") {
+        buf.push(msg);
+      } else {
+        flush();
+        items.push({ key: "s:" + msg.id, kind: "single", message: msg });
+      }
+    }
+    flush();
+    return items;
+  });
   let sessions = $derived(($sessionsByChat[chat.id] ?? []) as ChatSession[]);
   let latestSession = $derived(sessions[0]);
   let summaryOpen = $state(false);
@@ -161,14 +187,8 @@
 
   const MODES = ["minimal", "plan", "write"] as const;
 
-  marked.setOptions({ breaks: true, gfm: true });
-
   function renderSummary(summary: string): string {
-    try {
-      return marked.parse(summary) as string;
-    } catch {
-      return summary;
-    }
+    return renderMarkdown(summary);
   }
 
   function askCompact() {
@@ -287,8 +307,12 @@
           {/if}
         </div>
       {/if}
-      {#each messages as msg (msg.id)}
-        <MessageItem message={msg} showThinking={showThinking} />
+      {#each renderItems as item (item.key)}
+        {#if item.kind === "assistant"}
+          <AssistantTurn messages={item.messages} showThinking={showThinking} />
+        {:else}
+          <MessageItem message={item.message} showThinking={showThinking} />
+        {/if}
       {/each}
       {#if compactionResult}
         <div class="compact-result">
@@ -318,11 +342,12 @@
       <div bind:this={bottomEl}></div>
     </div>
 
-    <PendingPanel chatId={chat.id} />
     {#if $agentsPanelOpen}
       <AgentPanel />
     {/if}
-    <Composer running={running} inProject={!!project} modelSelected={modelSelected}>
+    <div class="composer-area">
+      <InteractionOverlay chatId={chat.id} />
+      <Composer running={running} inProject={!!project} modelSelected={modelSelected}>
       <button
         class="ag-btn {agentRunningInChat ? "running" : ""}"
         title={agentTooltip}
@@ -366,7 +391,8 @@
         </div>
       {/if}
       <ModelSelector chatId={chat.id} providerId={chat.provider_id} modelId={chat.model_id} />
-    </Composer>
+      </Composer>
+    </div>
 
     {#if dragOver}
       <div class="drop-overlay" aria-hidden="true">
@@ -424,6 +450,9 @@
 <style>
   .chat-view {
     min-width: 0;
+    position: relative;
+  }
+  .composer-area {
     position: relative;
   }
   .drop-overlay {

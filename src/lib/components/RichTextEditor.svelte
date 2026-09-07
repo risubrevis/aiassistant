@@ -10,7 +10,7 @@
     List,
     Pencil,
   } from "@lucide/svelte";
-  import { marked } from "marked";
+  import { renderMarkdown } from "$lib/markdown";
   import { m } from "$lib/i18n";
 
   let {
@@ -26,8 +26,7 @@
   let mode: "edit" | "preview" = $state("edit");
   let textareaEl: HTMLTextAreaElement | undefined = $state();
 
-  // User's own markdown in a desktop app; rendered as-is.
-  let previewHtml = $derived(marked.parse(value) as string);
+  let previewHtml = $derived(renderMarkdown(value));
 
   async function restoreSelection(
     el: HTMLTextAreaElement,
@@ -104,7 +103,7 @@
     <button
       class="tool"
       type="button"
-      title="Bold"
+      title={m.editor_bold()}
       disabled={mode === "preview"}
       onmousedown={(e) => e.preventDefault()}
       onclick={() => void wrapSelection("**", "**")}
@@ -114,7 +113,7 @@
     <button
       class="tool"
       type="button"
-      title="Italic"
+      title={m.editor_italic()}
       disabled={mode === "preview"}
       onmousedown={(e) => e.preventDefault()}
       onclick={() => void wrapSelection("*", "*")}
@@ -124,7 +123,7 @@
     <button
       class="tool"
       type="button"
-      title="Heading"
+      title={m.editor_heading()}
       disabled={mode === "preview"}
       onmousedown={(e) => e.preventDefault()}
       onclick={() => prefixLines("## ")}
@@ -134,7 +133,7 @@
     <button
       class="tool"
       type="button"
-      title="Bullet list"
+      title={m.editor_bullet_list()}
       disabled={mode === "preview"}
       onmousedown={(e) => e.preventDefault()}
       onclick={() => prefixLines("- ")}
@@ -144,7 +143,7 @@
     <button
       class="tool"
       type="button"
-      title="Code"
+      title={m.editor_code()}
       disabled={mode === "preview"}
       onmousedown={(e) => e.preventDefault()}
       onclick={() => void wrapSelection("`", "`")}
@@ -154,7 +153,7 @@
     <button
       class="tool"
       type="button"
-      title="Insert link"
+      title={m.editor_insert_link()}
       disabled={mode === "preview"}
       onmousedown={(e) => e.preventDefault()}
       onclick={() => void insertLink()}
@@ -165,7 +164,7 @@
     <button
       class="tool"
       type="button"
-      title={mode === "edit" ? "Preview" : m.common_edit()}
+      title={mode === "edit" ? m.editor_preview() : m.common_edit()}
       onclick={toggleMode}
     >
       {#if mode === "edit"}
@@ -186,7 +185,11 @@
     ></textarea>
   {:else}
     <div class="preview" style:min-height={minHeight}>
-      {@html previewHtml}
+      {#if previewHtml}
+        {@html previewHtml}
+      {:else}
+        <span class="preview-empty">{m.editor_empty()}</span>
+      {/if}
     </div>
   {/if}
 </div>
@@ -333,8 +336,15 @@
     max-width: 100%;
     border-radius: var(--radius-sm);
   }
-  .preview :global(table) {
+  .preview :global(.table-wrap) {
+    display: block;
+    max-width: 100%;
     margin: 0 0 0.5em;
+    overflow-x: auto;
+  }
+  .preview :global(table) {
+    display: table;
+    width: 100%;
     border-collapse: collapse;
     font-size: 0.78rem;
   }
@@ -343,5 +353,13 @@
     padding: 0.2rem 0.5rem;
     border: 1px solid var(--border);
     text-align: left;
+  }
+  .preview :global(th) {
+    background: var(--muted);
+    font-weight: 600;
+  }
+  .preview-empty {
+    color: var(--muted-foreground);
+    font-style: italic;
   }
 </style>

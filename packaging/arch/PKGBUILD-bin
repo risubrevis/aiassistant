@@ -3,12 +3,12 @@
 # Prebuilt-binary variant (fast install, no Rust/Node toolchain needed):
 #   cd packaging/arch
 #   makepkg -p PKGBUILD-bin -f
-#   sudo pacman -U aiassistant-1.0.5-1-x86_64.pkg.tar.zst
+#   sudo pacman -U aiassistant-1.0.7-1-x86_64.pkg.tar.zst
 #
 # For the from-source build, use the regular PKGBUILD instead.
 
 pkgname=aiassistant
-pkgver=1.0.5
+pkgver=1.0.7
 pkgrel=1
 pkgdesc="Provider-agnostic desktop app for chatting with LLMs and working on code projects (Tauri 2 + SvelteKit)"
 arch=('x86_64')

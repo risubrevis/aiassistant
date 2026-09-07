@@ -66,6 +66,12 @@
     }
   }
 
+  // Wrapped so the import is referenced in the module body (SSR build drops
+  // inline onclick handlers, which would otherwise flag `openUrl` as unused).
+  function openExternal(url: string) {
+    void openUrl(url);
+  }
+
   async function checkForUpdates() {
     checking = true;
     error = null;
@@ -178,7 +184,7 @@
         title={WEBSITE_URL}
         onclick={(e) => {
           e.preventDefault();
-          void openUrl(WEBSITE_URL);
+          openExternal(WEBSITE_URL);
         }}
       >{WEBSITE_URL}</a>
       {@render copyBtn("website", WEBSITE_URL)}
@@ -191,7 +197,7 @@
         title={REPO_URL}
         onclick={(e) => {
           e.preventDefault();
-          void openUrl(REPO_URL);
+          openExternal(REPO_URL);
         }}
       >{REPO_URL}</a>
       {@render copyBtn("repo", REPO_URL)}
@@ -214,7 +220,7 @@
           title={method.url}
           onclick={(e) => {
             e.preventDefault();
-            if (method.url) void openUrl(method.url);
+            if (method.url) openExternal(method.url);
           }}
         >{method.address}</a>
         {@render copyBtn(method.id, method.address)}
@@ -337,7 +343,7 @@
             <Download size={12} /> {m.settings_about_updates_download_install()}
           </button>
         {:else}
-          <button class="chip" onclick={() => void openUrl(RELEASES_URL)}>
+          <button class="chip" onclick={() => openExternal(RELEASES_URL)}>
             <ExternalLink size={12} /> {m.settings_about_updates_open_releases()}
           </button>
         {/if}
