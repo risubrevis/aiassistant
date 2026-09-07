@@ -2,6 +2,7 @@ import { writable } from "svelte/store";
 import * as ipc from "$lib/tauri";
 import type { Chat, Prompt } from "$lib/tauri";
 import { chats, openChat } from "$lib/stores/chat";
+import { loadProjectChats } from "$lib/stores/project";
 
 export const prompts = writable<Prompt[]>([]);
 
@@ -91,9 +92,15 @@ export async function movePrompt(id: string, toPosition: number): Promise<void> 
 }
 
 // No try/catch: errors (e.g. missing attached files) propagate to the caller to show a toast.
+// Register the chat in the master chats store (used by the main view to route
+// $chats.find(id)) and refresh the project's chat list so a project-bound prompt
+// shows up in the sidebar immediately instead of only after a restart.
 export async function runPrompt(id: string): Promise<Chat> {
   const chat = await ipc.promptRun(id);
   chats.update((list) => (list.some((c) => c.id === chat.id) ? list : [chat, ...list]));
+  if (chat.project_id) {
+    await loadProjectChats(chat.project_id);
+  }
   await loadPrompts();
   await loadFavoritePrompts();
   await openChat(chat.id);
