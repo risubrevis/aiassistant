@@ -19,10 +19,12 @@ const RAG_TOP_K: usize = 6;
 const SNIPPET_CHARS: usize = 900;
 
 pub fn embed_enabled(cfg: &Config) -> bool {
-    cfg.defaults
-        .embedding_model
-        .as_ref()
-        .is_some_and(|m| !m.provider.is_empty() && !m.model.is_empty())
+    cfg.defaults.rag_enabled
+        && cfg
+            .defaults
+            .embedding_model
+            .as_ref()
+            .is_some_and(|m| !m.provider.is_empty() && !m.model.is_empty())
 }
 
 /// Index a chat attachment (text files only). No-op for images/binaries.
@@ -75,12 +77,14 @@ pub async fn index_project_path(
     Ok(total)
 }
 
-/// Clear and re-index all paths of a project.
+/// Clear and re-index all paths of a project. No-op (and preserves existing
+/// vectors) when RAG is disabled — the scope is NOT deleted in that case, so
+/// re-enabling RAG keeps previously indexed chunks.
 pub async fn reindex_project(pool: &SqlitePool, cfg: &Config, project_id: &str) -> Result<usize> {
-    store::delete_scope(pool, "project", project_id).await?;
     if !embed_enabled(cfg) {
         return Ok(0);
     }
+    store::delete_scope(pool, "project", project_id).await?;
     let paths = models::list_project_paths(pool, project_id).await?;
     let mut total = 0;
     for p in paths {

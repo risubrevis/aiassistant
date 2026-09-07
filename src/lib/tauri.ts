@@ -51,6 +51,7 @@ export interface AppConfig {
     main_model: ModelRef | null;
     secondary_model: ModelRef | null;
     embedding_model: ModelRef | null;
+    rag_enabled: boolean;
     system_prompt: string;
     auto_collapse_context_pct: number;
     auto_pull_changes: boolean;
@@ -825,6 +826,8 @@ export const setDefaultsModel = (
   provider: string | null,
   model: string | null,
 ) => invoke<void>("set_defaults_model", { field, provider, model });
+export const setRagEnabled = (value: boolean) =>
+  invoke<void>("set_rag_enabled", { value });
 
 export function onProvidersChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("providers:changed", () => cb());

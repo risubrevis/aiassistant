@@ -6,6 +6,7 @@
   import * as ipc from "$lib/tauri";
   import type { Project, ProjectPath, Rule } from "$lib/tauri";
   import { projectSettingsOpen, projectSettingsId, deleteProject, projects } from "$lib/stores/project";
+  import { config as configStore } from "$lib/stores/config";
   import { m } from "$lib/i18n";
   import Select from "./Select.svelte";
   import ColorPicker from "./ColorPicker.svelte";
@@ -27,8 +28,17 @@
   let ruleArea = $state<HTMLTextAreaElement | null>(null);
   let ragChunks = $state(0);
   let ragBusy = $state(false);
+  let ragEnabled = $state(true);
   let confirmDeleteOpen = $state(false);
   let deleting = $state(false);
+
+  // RAG master switch comes from the global config (Settings → Models).
+  // The reindex button is disabled with a tooltip when RAG is off there.
+  let ragDisabledBySettings = $derived(!ragEnabled);
+  let reindexDisabled = $derived(ragBusy || ragDisabledBySettings);
+  let reindexTitle = $derived(
+    ragDisabledBySettings ? m.rag_disabled_tooltip() : undefined,
+  );
 
   const CROSS_CHAT_MODES = ["off", "summary", "retrieval", "hybrid"] as const;
 
@@ -44,6 +54,14 @@
 
   $effect(() => {
     ruleArea?.focus();
+  });
+
+  // Track the RAG master switch from the global config (auto-cleaned on destroy).
+  $effect(() => {
+    const unsub = configStore.subscribe((cfg) => {
+      ragEnabled = cfg?.defaults.rag_enabled ?? true;
+    });
+    return () => unsub();
   });
 
   let open = $derived($projectSettingsOpen);
@@ -295,7 +313,7 @@
                 {#if ragChunks > 0}
                   <span class="rag-count">{ragChunks} {m.rag_chunks()}</span>
                 {/if}
-                <button class="mini" onclick={reindexRag} disabled={ragBusy}>
+                <button class="mini" onclick={reindexRag} disabled={reindexDisabled} title={reindexTitle}>
                   {ragBusy ? m.rag_reindexing() : m.rag_reindex()}
                 </button>
                 <button class="mini" onclick={addPath}><Plus size={12} /> {m.sidebar_add_folder()}</button>

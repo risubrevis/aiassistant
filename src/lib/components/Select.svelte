@@ -16,6 +16,7 @@
     onchange,
     placeholder,
     title,
+    disabled = false,
     class: className = "",
     wide = true,
   }: {
@@ -24,6 +25,7 @@
     onchange: (value: string) => void;
     placeholder?: string;
     title?: string;
+    disabled?: boolean;
     class?: string;
     wide?: boolean;
   } = $props();
@@ -92,10 +94,13 @@
     bind:this={triggerEl}
     class="sel-trigger"
     class:placeholder={!current}
+    class:disabled
     title={title}
     aria-haspopup="listbox"
     aria-expanded={open}
-    onclick={() => (open = !open)}
+    aria-disabled={disabled}
+    disabled={disabled}
+    onclick={() => !disabled && (open = !open)}
   >
     <span class="sel-current">{currentLabel}</span>
     <ChevronDown size={14} />
@@ -161,6 +166,16 @@
   }
   .sel-trigger.placeholder {
     color: var(--muted-foreground);
+  }
+  .sel-trigger.disabled,
+  .sel-trigger:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .sel-trigger.disabled:hover,
+  .sel-trigger:disabled:hover {
+    background: var(--sel-background, var(--background));
+    color: var(--sel-color, var(--foreground));
   }
   .sel-current {
     flex: 1;

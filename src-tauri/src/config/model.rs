@@ -293,6 +293,12 @@ pub struct Defaults {
     pub secondary_model: Option<ModelRef>,
     #[serde(default)]
     pub embedding_model: Option<ModelRef>,
+    /// Master switch for retrieval-augmented generation (RAG): index chat
+    /// attachments and project files, then inject relevant snippets into the
+    /// system prompt. When false, no indexing or retrieval happens even if an
+    /// embedding model is configured (existing vectors are preserved).
+    #[serde(default = "default_true")]
+    pub rag_enabled: bool,
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
     #[serde(default = "default_collapse_pct")]
@@ -348,6 +354,7 @@ impl Default for Defaults {
             main_model: None,
             secondary_model: None,
             embedding_model: None,
+            rag_enabled: true,
             system_prompt: default_system_prompt(),
             auto_collapse_context_pct: default_collapse_pct(),
             disabled_tools: Vec::new(),

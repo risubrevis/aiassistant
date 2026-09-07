@@ -3,6 +3,7 @@
   import { config as configStore } from "$lib/stores/config";
   import {
     setDefaultsModel,
+    setRagEnabled,
     ragClearAll,
     ragStatus,
     onRagCleared,
@@ -23,11 +24,19 @@
   let primary = $state("");
   let secondary = $state("");
   let embedding = $state("");
+  let ragEnabled = $state(true);
   let activeModels = $state<ModelOption[]>([]);
   let allModels = $state<ModelOption[]>([]);
   let dirty = $state(false);
+  let ragDirty = $state(false);
   let saving = $state(false);
+  let ragSaving = $state(false);
   let totalChunks = $state(0);
+
+  // Pristine snapshots used by the RAG section's Cancel button to revert local
+  // edits without a refetch. Refreshed from config on every sync.
+  let lastRagEnabled = $state(true);
+  let lastEmbedding = $state("");
 
   const NOT_SELECTED = "";
 
@@ -40,7 +49,11 @@
     primary = refValue(cfg.defaults.main_model);
     secondary = refValue(cfg.defaults.secondary_model);
     embedding = refValue(cfg.defaults.embedding_model);
+    ragEnabled = cfg.defaults.rag_enabled;
+    lastEmbedding = embedding;
+    lastRagEnabled = ragEnabled;
     dirty = false;
+    ragDirty = false;
   }
 
   async function loadModels() {
@@ -67,14 +80,14 @@
 
   async function clearAllRag() {
     if (!window.confirm(m.rag_clear_confirm())) return;
-    saving = true;
+    ragSaving = true;
     try {
       await ragClearAll();
       await loadRagStatus();
     } catch (e) {
       toast.error(m.rag_cleared_msg(), String(e));
     } finally {
-      saving = false;
+      ragSaving = false;
     }
   }
 
@@ -145,19 +158,15 @@
       toast.error(m.settings_models_primary_required());
       return;
     }
-    // Capture all three selections before any await: each setDefaultsModel
-    // emits `config:reloaded`, which triggers syncFromConfig and overwrites the
-    // local `primary`/`secondary`/`embedding` state from the (not-yet-fully-
-    // saved) in-memory config — so reading them between awaits would save stale
-    // values (notably a reset embedding back to null).
+    // Capture all selections before any await: each setDefaultsModel emits
+    // `config:reloaded`, which triggers syncFromConfig and overwrites local
+    // state from the (not-yet-fully-saved) in-memory config.
     const p = parseValue(primary)!;
     const s = parseValue(secondary);
-    const e = parseValue(embedding);
     saving = true;
     try {
       await setDefaultsModel("main_model", p.provider, p.model);
       await setDefaultsModel("secondary_model", s?.provider ?? null, s?.model ?? null);
-      await setDefaultsModel("embedding_model", e?.provider ?? null, e?.model ?? null);
       dirty = false;
       toast.success(m.settings_models_saved());
     } catch (err) {
@@ -172,7 +181,6 @@
     try {
       await setDefaultsModel("main_model", null, null);
       await setDefaultsModel("secondary_model", null, null);
-      await setDefaultsModel("embedding_model", null, null);
       dirty = false;
       toast.success(m.settings_models_reset());
     } catch (err) {
@@ -181,70 +189,128 @@
       saving = false;
     }
   }
+
+  function toggleRag() {
+    ragEnabled = !ragEnabled;
+    ragDirty = true;
+  }
+
+  function cancelRag() {
+    ragEnabled = lastRagEnabled;
+    embedding = lastEmbedding;
+    ragDirty = false;
+  }
+
+  async function saveRag() {
+    // Capture before any await (see save() above for rationale).
+    const e = parseValue(embedding);
+    const enabled = ragEnabled;
+    ragSaving = true;
+    try {
+      await setRagEnabled(enabled);
+      await setDefaultsModel("embedding_model", e?.provider ?? null, e?.model ?? null);
+      ragDirty = false;
+      toast.success(m.settings_models_saved());
+    } catch (err) {
+      toast.error(m.settings_models_save_failed(), String(err));
+    } finally {
+      ragSaving = false;
+    }
+  }
 </script>
 
 <div class="models">
   {#if activeModels.length === 0 && !primary && !secondary && !embedding}
     <div class="empty">{m.settings_models_empty()}</div>
   {:else}
-    <div class="fields">
-      <div class="field">
-        <span class="label">{m.settings_models_primary()}</span>
-        <Select
-          class="w-full"
-          value={primary}
-          items={primaryItems}
-          placeholder={m.settings_models_not_selected()}
-          onchange={(v) => {
-            primary = v;
-            dirty = true;
-          }}
-        />
+    <section class="block">
+      <div class="fields">
+        <div class="field">
+          <span class="label">{m.settings_models_primary()}</span>
+          <Select
+            class="w-full"
+            value={primary}
+            items={primaryItems}
+            placeholder={m.settings_models_not_selected()}
+            onchange={(v) => {
+              primary = v;
+              dirty = true;
+            }}
+          />
+        </div>
+        <div class="field">
+          <span class="label">{m.settings_models_secondary()}</span>
+          <Select
+            class="w-full"
+            value={secondary}
+            items={secondaryOptions}
+            placeholder={m.settings_models_not_selected()}
+            onchange={(v) => {
+              secondary = v;
+              dirty = true;
+            }}
+          />
+        </div>
       </div>
-      <div class="field">
-        <span class="label">{m.settings_models_secondary()}</span>
-        <Select
-          class="w-full"
-          value={secondary}
-          items={secondaryOptions}
-          onchange={(v) => {
-            secondary = v;
-            dirty = true;
-          }}
-        />
+
+      <div class="actions">
+        <button class="btn primary" onclick={save} disabled={saving || !dirty}>
+          {saving ? "…" : m.common_save()}
+        </button>
+        <button class="btn ghost" onclick={reset} disabled={saving}>
+          {m.common_reset()}
+        </button>
       </div>
+    </section>
+
+    <section class="block rag-section" class:disabled={!ragEnabled}>
+      <div class="rag-head">
+        <label class="rag-toggle">
+          <input type="checkbox" checked={ragEnabled} onchange={toggleRag} />
+          <span class="rag-toggle-label">{m.settings_models_rag_section()}</span>
+        </label>
+        <span class="rag-toggle-enabled">{m.settings_models_rag_enabled()}</span>
+      </div>
+
       <div class="field">
         <span class="label">{m.settings_models_embedding()}</span>
         <Select
           class="w-full"
           value={embedding}
           items={embeddingOptions}
+          placeholder={m.settings_models_not_selected()}
+          disabled={!ragEnabled}
+          title={ragEnabled ? undefined : m.settings_models_rag_disabled_hint()}
           onchange={(v) => {
             embedding = v;
-            dirty = true;
+            ragDirty = true;
           }}
         />
       </div>
-    </div>
 
-    <div class="rag-clear">
-      <span class="rag-clear-info">
-        {totalChunks} {m.rag_chunks()}
-        <span class="muted"> · {m.rag_clear_all_hint()}</span>
-      </span>
-      <button class="btn danger" onclick={clearAllRag} disabled={saving}>
-        {m.rag_clear_all()}
-      </button>
-    </div>
+      {#if !ragEnabled}
+        <p class="rag-hint">{m.settings_models_rag_disabled_hint()}</p>
+      {/if}
 
-    <div class="actions">
-      <button class="btn primary" onclick={save} disabled={saving || !dirty}>
-        {saving ? "…" : m.common_save()}
-      </button>
-      <button class="btn ghost" onclick={reset} disabled={saving}>
-        {m.common_reset()}
-      </button>
-    </div>
+      <div class="rag-clear">
+        <span class="rag-clear-info">
+          {totalChunks} {m.rag_chunks()}
+          <span class="muted"> · {m.rag_clear_all_hint()}</span>
+        </span>
+        <button class="btn danger" onclick={clearAllRag} disabled={ragSaving}>
+          {m.rag_clear_all()}
+        </button>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" onclick={saveRag} disabled={ragSaving || !ragDirty}>
+          {ragSaving ? "…" : m.common_save()}
+        </button>
+        <button class="btn ghost" onclick={cancelRag} disabled={ragSaving || !ragDirty}>
+          {m.common_cancel()}
+        </button>
+      </div>
+    </section>
   {/if}
 </div>
 
@@ -252,7 +318,12 @@
   .models {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 1rem;
+  }
+  .block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
   }
   .fields {
     display: flex;
@@ -299,6 +370,39 @@
     color: var(--muted-foreground);
     font-size: 0.8125rem;
     padding: 0.5rem 0;
+  }
+  .rag-section {
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  .rag-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .rag-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    cursor: default;
+  }
+  .rag-toggle input {
+    width: 0.95rem;
+    height: 0.95rem;
+    cursor: default;
+  }
+  .rag-toggle-enabled {
+    font-size: 0.72rem;
+    color: var(--muted-foreground);
+  }
+  .rag-hint {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--muted-foreground);
+    line-height: 1.35;
   }
   .rag-clear {
     display: flex;

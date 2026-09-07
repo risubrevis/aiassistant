@@ -2596,6 +2596,20 @@ async fn set_add_environment_info(
     Ok(())
 }
 
+#[tauri::command]
+async fn set_rag_enabled(
+    value: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    config::write_rag_enabled(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.defaults.rag_enabled = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// On-request view of tracked project file changes (docs/08).
 #[tauri::command]
 async fn project_changed_files(
@@ -2864,6 +2878,7 @@ pub fn run() {
             providers_active_models,
             providers_all_models,
             set_defaults_model,
+            set_rag_enabled,
             rag_reindex_project,
             rag_clear_project,
             rag_status,
