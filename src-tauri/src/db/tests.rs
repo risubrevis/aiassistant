@@ -190,6 +190,17 @@ async fn delete_project_cascades_to_chats_and_all_data() {
             .await
             .unwrap();
     }
+    // Task row must come after the chats loop: chat_id references cA (FK).
+    sqlx::query("INSERT INTO project_tasks (id, project_id, chat_id, title, description, status, priority, position, created_at, updated_at) VALUES ('pt1','proj','cA','do thing','desc','todo','high',0,?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_task_changelog (id, task_id, from_status, to_status, changed_at) VALUES ('ptc1','pt1','backlog','todo',?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     // Standalone chat outside the project — must survive the delete.
     sqlx::query("INSERT INTO chats (id, project_id, title, provider_id, model_id, created_at, updated_at) VALUES ('cOut',NULL,'out','p','m',?1,?1)")
@@ -200,6 +211,7 @@ async fn delete_project_cascades_to_chats_and_all_data() {
 
     assert_eq!(count(&pool, "chats").await, 3);
     assert_eq!(count(&pool, "projects").await, 1);
+    assert_eq!(count(&pool, "project_tasks").await, 1);
 
     crate::db::models::delete_project(&pool, "proj")
         .await
@@ -224,6 +236,16 @@ async fn delete_project_cascades_to_chats_and_all_data() {
     assert_eq!(count(&pool, "agent_sessions").await, 0);
     assert_eq!(count(&pool, "chat_sessions").await, 0);
     assert_eq!(count(&pool, "attachments").await, 0);
+    assert_eq!(
+        count(&pool, "project_tasks").await,
+        0,
+        "project tasks must be deleted with the project"
+    );
+    assert_eq!(
+        count(&pool, "project_task_changelog").await,
+        0,
+        "task changelog must cascade-delete with tasks"
+    );
 
     let fts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages_fts")
         .fetch_one(&pool)

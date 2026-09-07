@@ -594,6 +594,11 @@ pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<()> {
         .fetch_all(pool)
         .await?;
     for cid in &chat_ids {
+        // Remove attachment files from disk (best-effort); the DB rows cascade
+        // away when the chat is deleted below, but the files themselves do not.
+        if let Err(e) = crate::db::attachments::delete_chat_attachments(pool, cid).await {
+            tracing::warn!("attachment cleanup failed for chat {cid} during project delete: {e}");
+        }
         sqlx::query("DELETE FROM tool_calls WHERE chat_id = ?1")
             .bind(cid)
             .execute(pool)
@@ -614,6 +619,11 @@ pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<()> {
         .execute(pool)
         .await?;
     sqlx::query("DELETE FROM project_paths WHERE project_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    // project_task_changelog cascades from project_tasks via FK (ON DELETE CASCADE).
+    sqlx::query("DELETE FROM project_tasks WHERE project_id = ?1")
         .bind(id)
         .execute(pool)
         .await?;

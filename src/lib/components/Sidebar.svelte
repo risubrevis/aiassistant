@@ -12,8 +12,10 @@
     Settings,
   } from "@lucide/svelte";
   import { m } from "$lib/i18n";
+  import { toast } from "$lib/stores/toasts";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import RenameModal from "./RenameModal.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
   import Select from "./Select.svelte";
   import {
     chats,
@@ -65,6 +67,8 @@
 
   let ctxMenu = $state<{ x: number; y: number; items: ContextMenuItem[] } | null>(null);
   let renameTarget = $state<{ kind: "chat" | "project"; id: string; name: string } | null>(null);
+  let confirmDelete = $state<{ kind: "chat" | "project"; id: string; name: string } | null>(null);
+  let deleting = $state(false);
   let createProjectOpen = $state(false);
 
   let dragId = $state<string | null>(null);
@@ -211,7 +215,9 @@
         label: m.ctx_delete(),
         icon: Trash2,
         danger: true,
-        onclick: () => void deleteChat(c.id),
+        onclick: () => {
+          confirmDelete = { kind: "chat", id: c.id, name: c.title };
+        },
       },
     ];
   }
@@ -241,7 +247,7 @@
         icon: Trash2,
         danger: true,
         onclick: () => {
-          if (window.confirm(m.common_delete() + ": " + p.name + "?")) void deleteProject(p.id);
+          confirmDelete = { kind: "project", id: p.id, name: p.name };
         },
       },
     ];
@@ -253,6 +259,26 @@
     if (!target) return;
     if (target.kind === "chat") await renameChat(target.id, name);
     else await renameProject(target.id, name);
+  }
+
+  async function onConfirmDelete() {
+    const target = confirmDelete;
+    if (!target) return;
+    deleting = true;
+    try {
+      if (target.kind === "chat") {
+        await deleteChat(target.id);
+        toast.success(m.chat_deleted(), target.name);
+      } else {
+        await deleteProject(target.id);
+        toast.success(m.project_deleted(), target.name);
+      }
+      confirmDelete = null;
+    } catch (e) {
+      toast.error(m.common_delete_failed(), String(e));
+    } finally {
+      deleting = false;
+    }
   }
 
   function onDragStart(e: DragEvent, id: string) {
@@ -601,6 +627,15 @@
     initial=""
     onsave={onCreateProjectSave}
     oncancel={() => (createProjectOpen = false)}
+  />
+
+  <ConfirmDialog
+    open={confirmDelete !== null}
+    message={confirmDelete?.kind === "project" ? m.project_delete_confirm() : m.chat_delete_confirm()}
+    loading={deleting}
+    loadingLabel={m.common_deleting()}
+    onconfirm={() => void onConfirmDelete()}
+    oncancel={() => (confirmDelete = null)}
   />
 </aside>
 

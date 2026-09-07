@@ -9,6 +9,7 @@
   import { m } from "$lib/i18n";
   import Select from "./Select.svelte";
   import ColorPicker from "./ColorPicker.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
 
   let project = $state<Project | null>(null);
   let paths = $state<ProjectPath[]>([]);
@@ -26,6 +27,8 @@
   let ruleArea = $state<HTMLTextAreaElement | null>(null);
   let ragChunks = $state(0);
   let ragBusy = $state(false);
+  let confirmDeleteOpen = $state(false);
+  let deleting = $state(false);
 
   const CROSS_CHAT_MODES = ["off", "summary", "retrieval", "hybrid"] as const;
 
@@ -204,11 +207,25 @@
     }
   }
 
-  async function removeProject() {
+  function removeProject() {
     if (!project) return;
-    if (!window.confirm(`${m.common_delete()}: ${project.name}?`)) return;
-    await deleteProject(project.id);
-    close();
+    confirmDeleteOpen = true;
+  }
+
+  async function confirmDeleteProject() {
+    if (!project) return;
+    deleting = true;
+    try {
+      const name = project.name;
+      await deleteProject(project.id);
+      toast.success(m.project_deleted(), name);
+      confirmDeleteOpen = false;
+      close();
+    } catch (e) {
+      toast.error(m.common_delete_failed(), String(e));
+    } finally {
+      deleting = false;
+    }
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -342,6 +359,15 @@
       </div>
     </div>
   {/if}
+
+  <ConfirmDialog
+    open={confirmDeleteOpen}
+    message={m.project_delete_confirm()}
+    loading={deleting}
+    loadingLabel={m.common_deleting()}
+    onconfirm={() => void confirmDeleteProject()}
+    oncancel={() => (confirmDeleteOpen = false)}
+  />
 {/if}
 
 <style>

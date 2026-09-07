@@ -2,6 +2,7 @@ import { writable, get } from "svelte/store";
 import * as ipc from "$lib/tauri";
 import * as tasksStore from "$lib/stores/tasks";
 import { loadProjectChats } from "$lib/stores/project";
+import { loadProjectTasks } from "$lib/stores/projectTasks";
 import { boardProjectId, homeView, promptsView } from "$lib/stores/app";
 import { save } from "@tauri-apps/plugin-dialog";
 import { toast } from "$lib/stores/toasts";
@@ -174,29 +175,36 @@ export async function newChat(projectId?: string | null) {
   }
 }
 
+// No try/catch: errors propagate to the caller to show a toast.
 export async function deleteChat(id: string) {
-  try {
-    await ipc.chatDelete(id);
-    chats.update((list) => list.filter((c) => c.id !== id));
-    messagesByChat.update((m) => {
-      const next = { ...m };
-      delete next[id];
-      return next;
-    });
-    sessionsByChat.update((m) => {
-      const next = { ...m };
-      delete next[id];
-      return next;
-    });
-    attachmentsByChat.update((m) => {
-      const next = { ...m };
-      delete next[id];
-      return next;
-    });
-    loaded.delete(id);
-    if (get(currentChatId) === id) currentChatId.set(null);
-  } catch (e) {
-    console.error("chatDelete failed", e);
+  const chat = get(chats).find((c) => c.id === id);
+  const projectId = chat?.project_id ?? null;
+  await ipc.chatDelete(id);
+  chats.update((list) => list.filter((c) => c.id !== id));
+  messagesByChat.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  sessionsByChat.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  attachmentsByChat.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  tasksStore.clearTasks(id);
+  loaded.delete(id);
+  if (get(currentChatId) === id) currentChatId.set(null);
+  // Refresh the project's chat list and Kanban board: the deleted chat must
+  // disappear from the sidebar, and any task linked to it must reflect the
+  // DB's ON DELETE SET NULL (chat_id cleared) instead of stale in-memory data.
+  if (projectId) {
+    void loadProjectChats(projectId);
+    void loadProjectTasks(projectId);
   }
 }
 

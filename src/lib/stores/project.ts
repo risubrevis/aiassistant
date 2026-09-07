@@ -2,6 +2,7 @@ import { writable } from "svelte/store";
 import * as ipc from "$lib/tauri";
 import type { Chat, Project, ChangedFileView } from "$lib/tauri";
 import { COMPOSER_INSERT_EVENT } from "$lib/events";
+import { tasksByProject } from "./projectTasks";
 
 export const projects = writable<Project[]>([]);
 export const currentProjectId = writable<string | null>(null);
@@ -57,29 +58,31 @@ export async function createProject(name: string, color = "#6366f1") {
   }
 }
 
+// No try/catch: errors propagate to the caller to show a toast.
 export async function deleteProject(id: string) {
-  try {
-    await ipc.projectDelete(id);
-    projects.update((list) => list.filter((p) => p.id !== id));
-    projectChats.update((m) => {
-      const next = { ...m };
-      delete next[id];
-      return next;
-    });
-    fileChanges.update((m) => {
-      const next = { ...m };
-      delete next[id];
-      return next;
-    });
-    changedFileViews.update((m) => {
-      const next = { ...m };
-      delete next[id];
-      return next;
-    });
-    currentProjectId.update((cur) => (cur === id ? null : cur));
-  } catch (e) {
-    console.error("projectDelete failed", e);
-  }
+  await ipc.projectDelete(id);
+  projects.update((list) => list.filter((p) => p.id !== id));
+  projectChats.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  fileChanges.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  changedFileViews.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  tasksByProject.update((m) => {
+    const next = { ...m };
+    delete next[id];
+    return next;
+  });
+  currentProjectId.update((cur) => (cur === id ? null : cur));
 }
 
 export async function openProject(id: string) {

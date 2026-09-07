@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { LoaderCircle } from "@lucide/svelte";
   import { m } from "$lib/i18n";
 
   let {
@@ -6,6 +7,8 @@
     message,
     confirmLabel,
     cancelLabel,
+    loading = false,
+    loadingLabel,
     onconfirm,
     oncancel,
   }: {
@@ -13,14 +16,18 @@
     message: string;
     confirmLabel?: string;
     cancelLabel?: string;
+    loading?: boolean;
+    loadingLabel?: string;
     onconfirm: () => void;
     oncancel: () => void;
   } = $props();
 
   const confirm = $derived(confirmLabel ?? m.common_delete());
   const cancel = $derived(cancelLabel ?? m.common_cancel());
+  const loadingText = $derived(loadingLabel ?? m.common_deleting());
 
   function onKeydown(e: KeyboardEvent) {
+    if (loading) return;
     if (e.key === "Escape") oncancel();
   }
 </script>
@@ -40,8 +47,14 @@
       </div>
       <footer class="foot">
         <span class="spacer"></span>
-        <button class="btn" onclick={oncancel}>{cancel}</button>
-        <button class="btn danger" onclick={onconfirm}>{confirm}</button>
+        <button class="btn" onclick={oncancel} disabled={loading}>{cancel}</button>
+        <button class="btn danger" onclick={onconfirm} disabled={loading}>
+          {#if loading}
+            <LoaderCircle size={12} class="spin" /> {loadingText}
+          {:else}
+            {confirm}
+          {/if}
+        </button>
       </footer>
     </div>
   </div>
@@ -107,6 +120,10 @@
   .btn:hover {
     background: var(--accent);
   }
+  .btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
   .btn.danger {
     background: var(--destructive);
     border-color: var(--destructive);
@@ -115,5 +132,16 @@
   .btn.danger:hover {
     filter: brightness(0.92);
     background: var(--destructive);
+  }
+  .btn.danger:disabled {
+    filter: none;
+  }
+  :global(.spin) {
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>
