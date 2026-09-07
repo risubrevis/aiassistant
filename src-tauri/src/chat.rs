@@ -429,6 +429,10 @@ Output exactly this Markdown structure:
 ## Relevant files
 - (file or directory path: why it matters)"#;
 
+const TITLE_PROMPT: &str = "You generate a short, descriptive title for a chat conversation. \
+Rules: 2-6 words, plain text, no quotes, no trailing punctuation, no prefix like \"Title:\". \
+Respond with ONLY the title.";
+
 /// Rough token estimate (chars/4). Used only for sizing the tail and recording
 /// an approximate token_count — the trigger itself uses real API usage.
 fn estimate_tokens(text: &str) -> i64 {
@@ -628,6 +632,107 @@ pub async fn run_compaction(
         model: Some(model.to_string()),
         created_at: now_ms(),
     }))
+}
+
+/// Best-effort LLM-generated chat title. Uses the configured secondary (fast)
+/// model when available, otherwise the chat's main model. Returns the title,
+/// or None on failure (caller falls back to a first-line heuristic).
+pub async fn generate_chat_title(
+    pool: &SqlitePool,
+    config: &Config,
+    chat: &Chat,
+    project: Option<&crate::db::models::Project>,
+) -> Option<String> {
+    let (pcfg, model) = if let Some(sm) = config
+        .defaults
+        .secondary_model
+        .as_ref()
+        .filter(|m| !m.provider.is_empty() && !m.model.is_empty())
+    {
+        let p = crate::db::providers::get_provider(pool, &sm.provider)
+            .await
+            .ok()
+            .flatten()?
+            .to_config_provider();
+        let m = crate::db::providers::get_model(pool, &sm.model)
+            .await
+            .ok()
+            .flatten()?
+            .name;
+        (p, m)
+    } else {
+        let (p, model, _uuid) = resolve_provider(pool, chat, project, config).await?;
+        (p, model)
+    };
+
+    let history =
+        models::list_active_branch(pool, &chat.id, rules::active_leaf(&chat.meta).as_deref())
+            .await
+            .ok()?;
+    let user_text = history
+        .iter()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+    let assistant_text = history
+        .iter()
+        .find(|m| m.role == "assistant")
+        .map(|m| m.content.as_str())
+        .unwrap_or("");
+    if user_text.is_empty() || assistant_text.is_empty() {
+        return None;
+    }
+    let user_text: String = user_text.chars().take(500).collect();
+    let assistant_text: String = assistant_text.chars().take(1000).collect();
+
+    let req = CompleteRequest {
+        model,
+        messages: vec![ChatMessage {
+            role: "user".into(),
+            content: format!("User: {user_text}\n\nAssistant: {assistant_text}"),
+            tool_call_id: None,
+            tool_calls: None,
+            parts: None,
+        }],
+        system: Some(TITLE_PROMPT.to_string()),
+        temperature: Some(0.3),
+        max_tokens: Some(48),
+        tools: None,
+    };
+
+    // Stream the title and collect text deltas.
+    let (tx, mut rx) = mpsc::channel::<CompleteEvent>(64);
+    let provider: Box<dyn Provider + Send> = provider_dyn(&pcfg);
+    let stream_task = tauri::async_runtime::spawn(async move {
+        if let Err(e) = provider.stream_complete(req, tx).await {
+            error!("title gen stream error: {e}");
+        }
+    });
+    let mut title = String::new();
+    while let Some(ev) = rx.recv().await {
+        if let CompleteEvent::BlockDelta { text: Some(t), .. } = ev {
+            title.push_str(&t);
+        }
+    }
+    let _ = stream_task.await;
+
+    let cleaned: String = title
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .chars()
+        .take(60)
+        .collect();
+    if cleaned.is_empty() {
+        warn!(
+            "title generation produced an empty title for chat {}",
+            chat.id
+        );
+        return None;
+    }
+    Some(cleaned)
 }
 
 /// Build LLM history, replacing the pre-boundary range with the session summary
@@ -1003,23 +1108,6 @@ async fn start_turn(
                 if let Err(e) = attachments::link_to_message(&pool, &attachment_ids, &user_id).await
                 {
                     warn!("failed to link attachments: {e:#}");
-                }
-            }
-            // Update title from the first user message if it's still the default.
-            if chat.title == "New chat" {
-                let title: String = payload
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .chars()
-                    .take(60)
-                    .collect();
-                if !title.is_empty() {
-                    let _ = models::rename_chat(&pool, &chat_id, &title, now_ms()).await;
-                    let _ = app.emit(
-                        "chat:renamed",
-                        serde_json::json!({ "chat_id": chat_id, "title": title }),
-                    );
                 }
             }
             user_id
@@ -1879,6 +1967,7 @@ async fn run_turn(
     crate::tools::clear_path_roots();
     crate::tools::set_trash_mode(false);
 
+    let turn_ok = last_finish != "error";
     let _ = app.emit(
         "chat:message_done",
         MessageDonePayload {
@@ -1889,6 +1978,71 @@ async fn run_turn(
         },
     );
     emit_status(&app, &chat_id, ChatStatus::Idle, None);
+
+    // Auto-generate a chat title via LLM after the first turn, if the title is
+    // still the default. Best-effort, non-blocking; falls back to a first-line
+    // heuristic on LLM failure so the chat is never stuck as "New chat".
+    if chat.title == "New chat" && turn_ok {
+        let app2 = app.clone();
+        let pool2 = pool.clone();
+        let config2 = config.clone();
+        let chat_id2 = chat_id.clone();
+        tauri::async_runtime::spawn(async move {
+            // Re-check fresh: the user may have renamed the chat during the turn.
+            let chat = match models::get_chat(&pool2, &chat_id2).await {
+                Ok(Some(c)) => c,
+                _ => return,
+            };
+            if chat.title != "New chat" {
+                return;
+            }
+            let project = projects::project_for_chat(&pool2, &chat).await;
+            let cfg = config2.read().unwrap().clone();
+            let title = match generate_chat_title(&pool2, &cfg, &chat, project.as_ref()).await {
+                Some(t) => t,
+                None => {
+                    // Fallback: first line of the first user message, truncated.
+                    let hist = match models::list_active_branch(
+                        &pool2,
+                        &chat_id2,
+                        rules::active_leaf(&chat.meta).as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(h) => h,
+                        Err(_) => return,
+                    };
+                    let first_user = hist
+                        .iter()
+                        .find(|m| m.role == "user")
+                        .map(|m| m.content.as_str())
+                        .unwrap_or("");
+                    let fallback: String = first_user
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .take(60)
+                        .collect();
+                    if fallback.is_empty() {
+                        return;
+                    }
+                    fallback
+                }
+            };
+            if models::rename_chat(&pool2, &chat_id2, &title, now_ms())
+                .await
+                .is_err()
+            {
+                return;
+            }
+            let _ = app2.emit(
+                "chat:renamed",
+                serde_json::json!({ "chat_id": chat_id2, "title": title }),
+            );
+            info!("auto-generated title for chat {chat_id2}: {title}");
+        });
+    }
 
     // A task linked to this chat has finished execution → move it to "review".
     match crate::db::project_tasks::finish_by_chat(&pool, &chat_id).await {

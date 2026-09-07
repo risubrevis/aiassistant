@@ -1,6 +1,6 @@
 [package]
 name = "aiassistant"
-version = "1.0.4"
+version = "1.0.5"
 description = "Provider-agnostic desktop app for chatting with LLMs and working on code projects."
 authors = ["AIAssistant"]
 edition = "2021"

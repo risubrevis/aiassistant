@@ -1,7 +1,7 @@
 import { writable, get } from "svelte/store";
 import * as ipc from "$lib/tauri";
 import * as tasksStore from "$lib/stores/tasks";
-import { loadProjectChats } from "$lib/stores/project";
+import { loadProjectChats, projectChats } from "$lib/stores/project";
 import { loadProjectTasks } from "$lib/stores/projectTasks";
 import { boardProjectId, homeView, promptsView } from "$lib/stores/app";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -602,6 +602,19 @@ export function applyStatus(e: ipc.StatusEvent) {
 
 export function applyChatRenamed(e: ipc.ChatRenamedEvent) {
   chats.update((list) => list.map((c) => (c.id === e.chat_id ? { ...c, title: e.title } : c)));
+  projectChats.update((map) => {
+    let changed = false;
+    const next: Record<string, Chat[]> = {};
+    for (const [pid, list] of Object.entries(map)) {
+      if (list.some((c) => c.id === e.chat_id)) {
+        next[pid] = list.map((c) => (c.id === e.chat_id ? { ...c, title: e.title } : c));
+        changed = true;
+      } else {
+        next[pid] = list;
+      }
+    }
+    return changed ? next : map;
+  });
 }
 
 export function applyCompacted(s: ChatSession) {
