@@ -2531,6 +2531,23 @@ async fn set_auto_collapse_context_pct(
 }
 
 #[tauri::command]
+async fn set_max_turns(
+    value: u32,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if !(1..=1000).contains(&value) {
+        return Err("max_turns must be 1..=1000".into());
+    }
+    config::write_max_turns(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.defaults.max_turns = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_auto_pull_changes(
     value: bool,
     state: State<'_, AppState>,
@@ -2865,6 +2882,7 @@ pub fn run() {
             set_edit_toggle,
             set_add_environment_info,
             set_auto_collapse_context_pct,
+            set_max_turns,
             set_auto_pull_changes,
             set_delete_to_trash,
             project_changed_files,

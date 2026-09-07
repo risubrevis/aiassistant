@@ -3,6 +3,7 @@
   import { config as configStore } from "$lib/stores/config";
   import {
     setDefaultsModel,
+    setMaxTurns,
     setRagEnabled,
     ragClearAll,
     ragStatus,
@@ -32,11 +33,15 @@
   let saving = $state(false);
   let ragSaving = $state(false);
   let totalChunks = $state(0);
+  let maxTurns = $state(50);
+  let mtDirty = $state(false);
+  let mtSaving = $state(false);
 
-  // Pristine snapshots used by the RAG section's Cancel button to revert local
+  // Pristine snapshots used by the section Cancel buttons to revert local
   // edits without a refetch. Refreshed from config on every sync.
   let lastRagEnabled = $state(true);
   let lastEmbedding = $state("");
+  let lastMaxTurns = $state(50);
 
   const NOT_SELECTED = "";
 
@@ -50,10 +55,13 @@
     secondary = refValue(cfg.defaults.secondary_model);
     embedding = refValue(cfg.defaults.embedding_model);
     ragEnabled = cfg.defaults.rag_enabled;
+    maxTurns = cfg.defaults.max_turns ?? 50;
     lastEmbedding = embedding;
     lastRagEnabled = ragEnabled;
+    lastMaxTurns = maxTurns;
     dirty = false;
     ragDirty = false;
+    mtDirty = false;
   }
 
   async function loadModels() {
@@ -217,6 +225,33 @@
       ragSaving = false;
     }
   }
+
+  function onMaxTurnsInput(e: Event) {
+    const v = Number((e.target as HTMLInputElement).value);
+    maxTurns = v;
+    mtDirty = v !== lastMaxTurns;
+  }
+
+  function cancelMaxTurns() {
+    maxTurns = lastMaxTurns;
+    mtDirty = false;
+  }
+
+  async function saveMaxTurns() {
+    const v = Math.max(1, Math.min(1000, Math.floor(maxTurns)));
+    mtSaving = true;
+    try {
+      await setMaxTurns(v);
+      maxTurns = v;
+      lastMaxTurns = v;
+      mtDirty = false;
+      toast.success(m.settings_models_max_turns_saved());
+    } catch (err) {
+      toast.error(m.settings_models_max_turns_save_failed(), String(err));
+    } finally {
+      mtSaving = false;
+    }
+  }
 </script>
 
 <div class="models">
@@ -312,6 +347,30 @@
       </div>
     </section>
   {/if}
+
+  <section class="block max-turns-section">
+    <div class="field">
+      <span class="label">{m.settings_models_max_turns()}</span>
+      <input
+        class="max-turns-input"
+        type="number"
+        min="1"
+        max="1000"
+        step="1"
+        value={maxTurns}
+        oninput={onMaxTurnsInput}
+      />
+      <p class="max-turns-hint">{m.settings_models_max_turns_hint()}</p>
+    </div>
+    <div class="actions">
+      <button class="btn primary" onclick={saveMaxTurns} disabled={mtSaving || !mtDirty}>
+        {mtSaving ? "…" : m.common_save()}
+      </button>
+      <button class="btn ghost" onclick={cancelMaxTurns} disabled={mtSaving || !mtDirty}>
+        {m.common_cancel()}
+      </button>
+    </div>
+  </section>
 </div>
 
 <style>
@@ -374,6 +433,26 @@
   .rag-section {
     border-top: 1px solid var(--border);
     padding-top: 0.75rem;
+  }
+  .max-turns-section {
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  .max-turns-input {
+    width: 8rem;
+    padding: 0.3rem 0.5rem;
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--foreground);
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .max-turns-hint {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--muted-foreground);
+    line-height: 1.35;
   }
   .rag-head {
     display: flex;

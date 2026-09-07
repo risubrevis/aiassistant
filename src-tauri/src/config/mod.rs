@@ -12,6 +12,7 @@ pub use model::{
 use tracing::warn;
 
 pub use watch::spawn_config_watcher;
+pub use write::write_max_turns;
 pub use write::{
     write_add_environment_info, write_auto_collapse_context_pct, write_auto_pull_changes,
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
@@ -150,6 +151,7 @@ edit_toggle = "ask"         # ask | auto
 # embedding_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # System prompt: system_prompt.md (same dir).
 auto_collapse_context_pct = 90
+max_turns = 50              # max LLM tool-call round-trips per turn (built-in agent loop); raise for long multi-step tasks
 disabled_tools = []          # builtin tool names hidden from the LLM (Settings → Tools)
 auto_pull_changes = true     # inject changed project files into context at turn start
 delete_to_trash = false      # delete_path: move to OS trash/recycle bin instead of permanent removal

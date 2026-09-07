@@ -57,6 +57,7 @@ export interface AppConfig {
     auto_pull_changes: boolean;
     delete_to_trash: boolean;
     add_environment_info: boolean;
+    max_turns: number;
   };
   hotkeys: Record<string, string>;
   logging: {
@@ -866,6 +867,8 @@ export const setEditToggle = (value: string) =>
   invoke<void>("set_edit_toggle", { value });
 export const setAutoCollapseContextPct = (value: number) =>
   invoke<void>("set_auto_collapse_context_pct", { value });
+export const setMaxTurns = (value: number) =>
+  invoke<void>("set_max_turns", { value });
 export const setAutoPullChanges = (value: boolean) =>
   invoke<void>("set_auto_pull_changes", { value });
 export const setDeleteToTrash = (value: boolean) =>

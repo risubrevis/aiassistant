@@ -2,7 +2,6 @@
   import { m } from "$lib/i18n";
   import {
     approveRequest,
-    ptyInput,
     type ApprovalRequestEvent,
     type AskUserEvent,
     type ChangeInfo,
@@ -10,18 +9,15 @@
   import {
     pendingApprovals,
     pendingByChat,
-    ptyByBlock,
     currentChatId,
     approvePending,
     rejectPending,
-    type PtyState,
   } from "$lib/stores/chat";
   import { pendingAsk, resolveAsk } from "$lib/stores/project";
   import {
     ShieldAlert,
     CircleHelp,
     FileDiff,
-    Terminal,
     FilePlus,
     FileEdit,
     FileX,
@@ -37,21 +33,15 @@
   type Interaction =
     | { kind: "approval"; key: string; data: ApprovalRequestEvent }
     | { kind: "ask"; key: string; data: AskUserEvent }
-    | { kind: "pending"; key: string; data: ChangeInfo[] }
-    | { kind: "pty"; key: string; data: PtyState };
+    | { kind: "pending"; key: string; data: ChangeInfo[] };
 
-  let dismissedPty = $state<Set<string>>(new Set());
   let resolving = $state<Record<string, boolean>>({});
   let busy = $state<"approve" | "reject" | null>(null);
   let askText = $state("");
   let askSelected = $state<Set<number>>(new Set());
-  let ptyText = $state("");
   let expanded = $state<Record<string, boolean>>({});
   let askInput = $state<HTMLInputElement | null>(null);
-  let ptyInputEl = $state<HTMLInputElement | null>(null);
 
-  // PtyState carries no chat_id, so running terminals are shown regardless of
-  // chat and hidden per-block once skipped via Esc.
   let list = $derived.by(() => {
     const approvals: Interaction[] = Object.entries($pendingApprovals)
       .filter(([, a]) => a.chat_id === chatId)
@@ -64,10 +54,7 @@
       changes && changes.length > 0
         ? [{ kind: "pending", key: "pending:" + chatId, data: changes }]
         : [];
-    const ptys: Interaction[] = Object.entries($ptyByBlock)
-      .filter(([id, p]) => p.code === null && !dismissedPty.has(id))
-      .map(([id, data]) => ({ kind: "pty", key: id, data }));
-    return [...approvals, ...asks, ...pending, ...ptys];
+    return [...approvals, ...asks, ...pending];
   });
 
   let active = $derived(list[0]);
@@ -77,7 +64,6 @@
     if (activeKey === null) return;
     askText = "";
     askSelected = new Set();
-    ptyText = "";
     expanded = {};
   });
 
@@ -146,32 +132,12 @@
     askText = "";
   }
 
-  function sendPtyRaw() {
-    const a = active;
-    if (!a || a.kind !== "pty") return;
-    void ptyInput(a.data.session_id, ptyText + "\n");
-    ptyText = "";
-  }
-
-  function sendCurrentPty() {
-    if (!active || active.kind !== "pty") return;
-    if (ptyText.trim()) sendPtyRaw();
-    else ptyInputEl?.focus();
-  }
-
-  function dismissPty(blockId: string) {
-    const next = new Set(dismissedPty);
-    next.add(blockId);
-    dismissedPty = next;
-  }
-
   function skipActive() {
     const a = active;
     if (!a) return;
     if (a.kind === "approval") void resolveApproval(a.data.request_id, false);
     else if (a.kind === "ask") void resolveAsk(a.data.block_id, "");
     else if (a.kind === "pending") void handlePending("reject");
-    else dismissPty(a.key);
   }
 
   function primaryAction() {
@@ -182,9 +148,6 @@
     else if (a.kind === "ask") {
       if (askText.trim()) submitCurrentAsk();
       else askInput?.focus();
-    } else {
-      if (ptyText.trim()) sendPtyRaw();
-      else ptyInputEl?.focus();
     }
   }
 
@@ -236,9 +199,6 @@
         <FileDiff size={14} class="ico" />
         <span class="title">{m.interaction_pending_title()}</span>
         <span class="count">{m.interaction_pending_count({ n: active.data.length })}</span>
-      {:else}
-        <Terminal size={14} class="ico" />
-        <span class="title">{m.interaction_pty_title()}</span>
       {/if}
       {#if list.length > 1}
         <span class="queue">{m.interaction_queue({ i: 1, n: list.length })}</span>
@@ -323,9 +283,6 @@
             </div>
           {/each}
         </div>
-      {:else}
-        <div class="cmd">$ {active.data.command}</div>
-        <pre class="pty-out">{active.data.output || "(running…)"}</pre>
       {/if}
     </div>
 
@@ -390,22 +347,6 @@
             }}
           />
           <button class="apr yes" onclick={submitCurrentAsk}>
-            <Send size={12} /> {m.ask_user_send()}
-          </button>
-        </div>
-        <span class="hint">{m.interaction_hint_send()}</span>
-      {:else}
-        <div class="acts">
-          <input
-            class="foot-input"
-            bind:this={ptyInputEl}
-            bind:value={ptyText}
-            placeholder={m.ask_user_placeholder()}
-            onkeydown={(e) => {
-              if (e.key === "Enter") sendPtyRaw();
-            }}
-          />
-          <button class="apr yes" onclick={sendCurrentPty}>
             <Send size={12} /> {m.ask_user_send()}
           </button>
         </div>
@@ -587,19 +528,6 @@
     font-size: 0.68rem;
     white-space: pre;
     border-top: 1px solid var(--border);
-  }
-  .cmd { font-family: var(--font-mono); font-size: 0.7rem; color: var(--muted-foreground); }
-  .pty-out {
-    margin: 0;
-    padding: 0.4rem;
-    background: hsl(0 0% 8%);
-    color: hsl(0 0% 92%);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-mono);
-    font-size: 0.72rem;
-    white-space: pre-wrap;
-    max-height: 180px;
-    overflow-y: auto;
   }
   :global(.spin) { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }

@@ -9,6 +9,7 @@
     Copy,
     Loader,
     RefreshCw,
+    Send,
     Sparkles,
     Wrench,
   } from "@lucide/svelte";
@@ -23,7 +24,7 @@
     retryTurn,
   } from "$lib/stores/chat";
   import { pendingAsk } from "$lib/stores/project";
-  import { attachmentReadDataUrl, type ContentBlock } from "$lib/tauri";
+  import { attachmentReadDataUrl, ptyInput, type ContentBlock } from "$lib/tauri";
 
   let { messages, showThinking = false }: { messages: UiMessage[]; showThinking?: boolean } = $props();
 
@@ -31,6 +32,7 @@
   let processOpen = $state(untrack(() => showThinking));
   let totalElapsedMs = $state(0);
   let cardOpen = $state<Record<string, boolean>>({});
+  let ptyText = $state("");
   let copiedId = $state<string | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -324,6 +326,33 @@
           <pre class="pty-out">{pty.output || "(running…)"}</pre>
           {#if pty.code !== null}
             <div class="pty-exit">exit {pty.code}</div>
+          {:else}
+            <div class="pty-input-row">
+              <input
+                class="pty-input"
+                type="text"
+                bind:value={ptyText}
+                placeholder={m.ask_user_placeholder()}
+                onkeydown={(e) => {
+                  if (e.key === "Enter" && ptyText.trim()) {
+                    void ptyInput(pty.session_id, ptyText + "\n");
+                    ptyText = "";
+                  }
+                }}
+              />
+              <button
+                type="button"
+                class="pty-send"
+                onclick={() => {
+                  if (ptyText.trim()) {
+                    void ptyInput(pty.session_id, ptyText + "\n");
+                    ptyText = "";
+                  }
+                }}
+              >
+                <Send size={12} />
+              </button>
+            </div>
           {/if}
         </div>
       {:else}
@@ -470,7 +499,7 @@
     border-radius: var(--radius-sm);
     color: var(--muted-foreground);
     text-align: left;
-    cursor: default;
+    cursor: pointer;
   }
   .proc-head { font-size: 0.78rem; }
   .tool-row-head { font-size: 0.75rem; }
@@ -654,6 +683,30 @@
     overflow-y: auto;
   }
   .pty-exit { font-size: 0.7rem; color: var(--muted-foreground); }
+  .pty-input-row { display: flex; gap: 0.3rem; }
+  .pty-input {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    padding: 0.25rem 0.4rem;
+    background: var(--background);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--foreground);
+  }
+  .pty-send {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    font-size: 0.7rem;
+    padding: 0.25rem 0.45rem;
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
   :global(.spin) { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 

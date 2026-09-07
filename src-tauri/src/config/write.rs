@@ -102,6 +102,13 @@ pub fn write_auto_collapse_context_pct(value: u32) -> Result<()> {
     write_doc(doc)
 }
 
+/// Set `[defaults].max_turns` (max LLM tool-call round-trips per turn).
+pub fn write_max_turns(value: u32) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["defaults"]["max_turns"] = toml_edit::value(value as i64);
+    write_doc(doc)
+}
+
 /// Set `[defaults].auto_pull_changes` (inject changed project files at turn start).
 pub fn write_auto_pull_changes(value: bool) -> Result<()> {
     let mut doc = load_doc()?;

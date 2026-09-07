@@ -1421,7 +1421,7 @@ async fn run_turn(
         project_skills: project_skills.clone(),
     });
 
-    let max_iters = 8;
+    let max_iters = cfg.defaults.max_turns.max(1) as usize;
     let mut last_message_id = String::new();
     let mut last_usage: Option<crate::providers::Usage> = None;
     let mut last_finish = "stop".to_string();
@@ -1429,6 +1429,7 @@ async fn run_turn(
     // Parent for the next message in the branch (advances as we go).
     let mut current_parent: String = leaf_id.clone();
 
+    let mut broke = false;
     for iter in 0..max_iters {
         let assistant_id = Uuid::new_v4().to_string();
         last_message_id = assistant_id.clone();
@@ -1662,6 +1663,7 @@ async fn run_turn(
         last_finish = finish_reason.clone();
 
         if finish_reason != "tool_calls" || tool_calls.is_empty() {
+            broke = true;
             break;
         }
 
@@ -1972,12 +1974,31 @@ async fn run_turn(
         "chat:message_done",
         MessageDonePayload {
             chat_id: chat_id.clone(),
-            message_id: last_message_id,
+            message_id: last_message_id.clone(),
             usage: last_usage,
             finish_reason: last_finish,
         },
     );
     emit_status(&app, &chat_id, ChatStatus::Idle, None);
+
+    // Loop exhausted max_turns without a clean stop: the model kept issuing
+    // tool calls. message_done was already emitted with finish_reason
+    // "tool_calls"; surface a visible error so the user knows why it stopped.
+    if !broke {
+        warn!("chat turn hit max_turns limit ({max_iters}) for {chat_id}");
+        let _ = app.emit(
+            "chat:turn_error",
+            TurnErrorPayload {
+                chat_id: chat_id.clone(),
+                message_id: last_message_id.clone(),
+                kind: "turn_limit".to_string(),
+                message: format!(
+                    "Reached the tool-turn limit ({max_iters}). The task may be incomplete — press Retry to continue from here, or raise max_turns in Settings/config."
+                ),
+                retryable: true,
+            },
+        );
+    }
 
     // Auto-generate a chat title via LLM after the first turn, if the title is
     // still the default. Best-effort, non-blocking; falls back to a first-line
@@ -2157,15 +2178,29 @@ async fn execute_ctx_tool(
             })
         }
         "todo_write" => {
-            let items: Vec<TaskInput> =
-                match serde_json::from_value(args.get("todos").cloned().unwrap_or_default()) {
+            let todos_val = args
+                .get("todos")
+                .cloned()
+                .unwrap_or(serde_json::Value::Array(vec![]));
+            let items: Vec<TaskInput> = match &todos_val {
+                // Some providers send the array as a JSON-encoded string.
+                serde_json::Value::String(s) => match serde_json::from_str::<Vec<TaskInput>>(s) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return crate::tools::ToolResult::err(format!(
+                            "invalid todos payload (string): {e}"
+                        ));
+                    }
+                },
+                _ => match serde_json::from_value::<Vec<TaskInput>>(todos_val.clone()) {
                     Ok(v) => v,
                     Err(e) => {
                         return crate::tools::ToolResult::err(format!(
                             "invalid todos payload: {e}"
                         ));
                     }
-                };
+                },
+            };
             match tasks::replace_tasks(&ctx.pool, chat_id, assistant_id, items).await {
                 Ok(replaced) => {
                     ctx.task_nudge.reset(chat_id);
