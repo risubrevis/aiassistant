@@ -5,11 +5,11 @@
   import type { UiMessage } from "$lib/stores/chat";
   import { config as configStore } from "$lib/stores/config";
   import { projects } from "$lib/stores/project";
-  import { configGet, setMode, setCommandToggle, setEditToggle, chatContextWindow, type Chat, type ChatSession } from "$lib/tauri";
+  import { configGet, setMode, setCommandToggle, setEditToggle, chatContextWindow, projectContextSummary, type Chat, type ChatSession, type ProjectContextSummary } from "$lib/tauri";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
-  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle } from "@lucide/svelte";
+  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
   import AssistantTurn from "./AssistantTurn.svelte";
@@ -128,6 +128,24 @@
   let editToggle = $derived($configStore?.defaults.edit_toggle ?? "ask");
   let project = $derived($projects.find((p) => p.id === chat.project_id) ?? null);
   let counts = $derived(taskCounts($tasksByChat[chat.id] ?? []));
+  let ctxSummary = $state<ProjectContextSummary | null>(null);
+  $effect(() => {
+    const pid = chat.project_id;
+    if (!pid) {
+      ctxSummary = null;
+      return;
+    }
+    projectContextSummary(pid)
+      .then((s) => (ctxSummary = s))
+      .catch(() => (ctxSummary = null));
+  });
+  let ctxTooltip = $derived.by(() => {
+    if (!ctxSummary) return "";
+    const parts: string[] = [];
+    if (ctxSummary.rule_files.length) parts.push(ctxSummary.rule_files.join(", "));
+    if (ctxSummary.skills.length) parts.push(`${ctxSummary.skills.length} ${m.context_skills()}`);
+    return parts.join(" · ");
+  });
 
   let thresholdPct = $derived($configStore?.defaults.auto_collapse_context_pct ?? 90);
 
@@ -273,6 +291,14 @@
       {#if project}
         <span class="pbadge" style="background:{project.color || '#6366f1'}"></span>
         <span class="pname" title={project.name}>{project.name}</span>
+        {#if ctxSummary && (ctxSummary.rule_files.length || ctxSummary.skills.length)}
+          <span class="ctx-badge" title={ctxTooltip}>
+            <FileText size={12} />
+            <span>{ctxSummary.rule_files.length}</span>
+            <Sparkles size={12} />
+            <span>{ctxSummary.skills.length}</span>
+          </span>
+        {/if}
         <span class="sep">/</span>
       {/if}
       <span class="title" class:thinking={running}>{chat.title}</span>
@@ -537,6 +563,18 @@
   }
   .sep {
     color: var(--muted-foreground);
+  }
+  .ctx-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 0.68rem;
+    color: var(--muted-foreground);
+    cursor: default;
+    margin-left: 0.2rem;
   }
   .export-btn {
     display: inline-flex;

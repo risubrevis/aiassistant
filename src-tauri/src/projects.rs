@@ -562,62 +562,204 @@ pub fn detect_rule_files(
     out
 }
 
-/// A skill discovered from a project's `.skills/` folder (docs/IDEAS: auto-connect skills).
-/// Each `*.md` file is one skill. id = filename stem; title = first `# ` heading or the stem.
-/// Consumed by chat.rs (skill discovery per turn).
-#[allow(dead_code)]
+/// Scan all project roots for known rule files (AGENTS.md, CLAUDE.md, …) and
+/// return `(filename, content)` pairs, deduplicated by filename (first root
+/// wins). Content is read live from disk so edits are picked up on the next
+/// turn. Used to inject project context into the system prompt without a DB
+/// snapshot.
+pub fn discover_rule_files(roots: &[std::path::PathBuf]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for root in roots {
+        for (_marker, filename, _full, content) in detect_rule_files(root) {
+            if !seen.insert(filename.clone()) {
+                continue;
+            }
+            out.push((filename, content));
+        }
+    }
+    out
+}
+
+/// A skill discovered from a project's `.agents/skills/` folder (standard Zed
+/// skill format) or the legacy `.skills/` folder. Each skill is one directory
+/// containing `SKILL.md` (new format) or one `*.md` file (legacy flat format).
 #[derive(Debug, Clone)]
 pub struct ProjectSkill {
     pub id: String,
     pub title: String,
+    pub description: String,
     pub body: String,
+    /// Absolute path to the skill's directory (new format) or its file (legacy).
+    /// Exposed so the model can read supporting files referenced by relative path.
+    pub dir: std::path::PathBuf,
 }
 
-/// Scan `<root>/.skills/*.md` for each root (non-recursive within `.skills`).
-/// Deduplicates by id (first occurrence wins). Skips empty files.
-#[allow(dead_code)]
+/// Keys parsed from a SKILL.md frontmatter block (simple `key: value` lines).
+#[derive(Default)]
+struct SkillFrontmatter {
+    name: Option<String>,
+    description: Option<String>,
+    disable_model_invocation: bool,
+}
+
+/// Parse a leading `---` / `---` frontmatter block out of `content`, returning
+/// the parsed keys and the body after the block. Without a complete block, the
+/// content is returned unchanged as the body.
+fn parse_skill_frontmatter(content: &str) -> (SkillFrontmatter, String) {
+    let mut meta = SkillFrontmatter::default();
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.first().copied() != Some("---") {
+        return (meta, content.to_string());
+    }
+    let Some(close) = lines.iter().skip(1).position(|l| *l == "---") else {
+        return (meta, content.to_string());
+    };
+    for line in &lines[1..1 + close] {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        match key.trim() {
+            "name" => meta.name = Some(value.to_string()),
+            "description" => meta.description = Some(value.to_string()),
+            "disable-model-invocation" => meta.disable_model_invocation = value == "true",
+            _ => {}
+        }
+    }
+    (meta, lines[1 + close + 1..].join("\n"))
+}
+
+fn first_heading(content: &str) -> Option<String> {
+    content.lines().find_map(|l| {
+        let t = l.trim_start();
+        t.strip_prefix("# ").map(|s| s.trim().to_string())
+    })
+}
+
+/// First non-blank, non-heading line, truncated for prompt-safe display.
+fn first_paragraph(content: &str) -> Option<String> {
+    let line = content
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with('#'))?;
+    let mut out: String = line.chars().take(160).collect();
+    if line.chars().count() > 160 {
+        out.push('…');
+    }
+    Some(out)
+}
+
+/// Scan each root for skills: `<root>/.agents/skills/<name>/SKILL.md` (standard
+/// Zed format, preferred) then `<root>/.skills/*.md` (legacy flat fallback).
+/// Deduplicates by id (first occurrence wins). Skips empty files and skills
+/// marked `disable-model-invocation: true`.
 pub fn discover_project_skills(roots: &[std::path::PathBuf]) -> Vec<ProjectSkill> {
     let mut out: Vec<ProjectSkill> = Vec::new();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for root in roots {
-        let skills_dir = root.join(".skills");
-        let entries = match std::fs::read_dir(&skills_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
+        if let Ok(entries) = std::fs::read_dir(root.join(".agents").join("skills")) {
+            for entry in entries.flatten() {
+                let dir = entry.path();
+                let Ok(id) = entry.file_name().into_string() else {
+                    continue;
+                };
+                let Ok(content) = std::fs::read_to_string(dir.join("SKILL.md")) else {
+                    continue;
+                };
+                let (fm, body) = parse_skill_frontmatter(&content);
+                if fm.disable_model_invocation || body.trim().is_empty() || !seen.insert(id.clone())
+                {
+                    continue;
+                }
+                if let Some(name) = fm.name.as_deref() {
+                    if name != id.as_str() {
+                        warn!("skill '{id}': frontmatter name '{name}' mismatch, using directory name");
+                    }
+                }
+                let title = first_heading(&body).unwrap_or_else(|| id.clone());
+                let description = fm
+                    .description
+                    .filter(|d| !d.trim().is_empty())
+                    .or_else(|| first_paragraph(&body))
+                    .unwrap_or_else(|| title.clone());
+                out.push(ProjectSkill {
+                    id,
+                    title,
+                    description,
+                    body,
+                    dir,
+                });
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(root.join(".skills")) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if content.trim().is_empty() {
+                    continue;
+                }
+                let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let id = id.to_string();
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                let title = first_heading(&content).unwrap_or_else(|| id.clone());
+                let description = first_paragraph(&content).unwrap_or_else(|| title.clone());
+                out.push(ProjectSkill {
+                    id,
+                    title,
+                    description,
+                    body: content,
+                    dir: path,
+                });
             }
-            let id = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-            if !seen.insert(id.clone()) {
-                continue;
-            }
-            let body = match std::fs::read_to_string(&path) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            if body.trim().is_empty() {
-                continue;
-            }
-            let title = body
-                .lines()
-                .find_map(|l| {
-                    let t = l.trim_start();
-                    t.strip_prefix("# ").map(|s| s.trim().to_string())
-                })
-                .unwrap_or_else(|| id.clone());
-            out.push(ProjectSkill { id, title, body });
         }
     }
     out
+}
+
+#[derive(Serialize)]
+pub struct ProjectContextSkill {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Serialize)]
+pub struct ProjectContextSummary {
+    pub rule_files: Vec<String>,
+    pub skills: Vec<ProjectContextSkill>,
+}
+
+/// Scan a project's connected folders for auto-connected context: rule files
+/// (AGENTS.md, CLAUDE.md, …) and skills (`.agents/skills/`). Drives the UI
+/// context indicator. Filesystem scan is cheap and runs on demand.
+pub async fn build_context_summary(pool: &SqlitePool, project_id: &str) -> ProjectContextSummary {
+    let paths = models::list_project_paths(pool, project_id)
+        .await
+        .unwrap_or_default();
+    let roots: Vec<PathBuf> = paths.into_iter().map(|pp| PathBuf::from(pp.path)).collect();
+    let rule_files: Vec<String> = discover_rule_files(&roots)
+        .into_iter()
+        .map(|(f, _)| f)
+        .collect();
+    let skills = discover_project_skills(&roots)
+        .into_iter()
+        .map(|s| ProjectContextSkill {
+            id: s.id,
+            title: s.title,
+            description: s.description,
+        })
+        .collect();
+    ProjectContextSummary { rule_files, skills }
 }
 
 #[cfg(test)]

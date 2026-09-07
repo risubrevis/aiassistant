@@ -36,6 +36,26 @@ pub async fn effective_system_prompt(
         }
     }
 
+    // Live-read project context files (AGENTS.md, CLAUDE.md, …) from attached
+    // dirs. Read fresh each turn so on-disk edits reach the model without a
+    // re-attach. (Replaces the old one-time DB auto-import.)
+    if let Some(p) = project {
+        if let Ok(paths) = models::list_project_paths(pool, &p.id).await {
+            let roots: Vec<std::path::PathBuf> = paths
+                .into_iter()
+                .map(|pp| std::path::PathBuf::from(pp.path))
+                .collect();
+            let files = crate::projects::discover_rule_files(&roots);
+            if !files.is_empty() {
+                let mut blocks = Vec::with_capacity(files.len());
+                for (filename, content) in &files {
+                    blocks.push(format!("[{}]\n{}", filename, content.trim()));
+                }
+                parts.push(format!("Project context files:\n{}", blocks.join("\n\n")));
+            }
+        }
+    }
+
     // Environment info helps the model pick correct shell commands and paths
     // when it may write files or run commands (plan/write modes only).
     if (mode == "plan" || mode == "write") && config.defaults.add_environment_info {
@@ -55,6 +75,11 @@ pub async fn effective_system_prompt(
     }
     if let Some(p) = project {
         if let Ok(pr) = models::list_rules(pool, "project", &p.id).await {
+            // Skip auto-imported snapshots — those files are live-read above.
+            let pr: Vec<_> = pr
+                .into_iter()
+                .filter(|r| r.added_by.as_deref() != Some("auto"))
+                .collect();
             if !pr.is_empty() {
                 rules_lines.push("Project rules:".into());
                 for r in pr {

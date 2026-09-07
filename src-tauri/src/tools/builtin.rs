@@ -2541,8 +2541,9 @@ impl Tool for ReadChat {
     }
 }
 
-/// LLM-callable tool that loads a project skill's full body from the `.skills/`
-/// folder. The skill list is bound per turn; execution is intercepted in chat.rs.
+/// LLM-callable tool that loads a project skill's full body from the project's
+/// `.agents/skills/` folder (or the legacy `.skills/` fallback). The skill list
+/// is bound per turn; execution is intercepted in chat.rs.
 #[allow(dead_code)]
 pub struct ConnectSkill {
     skills: Vec<ProjectSkill>,
@@ -2562,13 +2563,13 @@ impl Tool for ConnectSkill {
     }
     fn spec(&self) -> ToolSpec {
         let mut desc = String::from(
-            "Load a project skill from the project's .skills folder. Call this with a skill_id to retrieve the skill's full instructions, then follow them. Available skills:",
+            "Load a project skill from the project's .agents/skills folder. Call this with a skill_id to retrieve the skill's full instructions, then follow them. Available skills:",
         );
         if self.skills.is_empty() {
             desc.push_str(" (none)");
         } else {
             for s in &self.skills {
-                desc.push_str(&format!("\n- {}: {}", s.id, s.title));
+                desc.push_str(&format!("\n- {}: {}", s.id, s.description));
             }
         }
         let ids: Vec<String> = self.skills.iter().map(|s| s.id.clone()).collect();

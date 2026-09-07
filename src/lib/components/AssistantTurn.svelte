@@ -9,6 +9,7 @@
     Copy,
     Loader,
     RefreshCw,
+    Sparkles,
     Wrench,
   } from "@lucide/svelte";
   import { renderMarkdown } from "$lib/markdown";
@@ -62,6 +63,10 @@
 
   function isMcpTool(name: string | undefined): boolean {
     return name?.startsWith("mcp__") ?? false;
+  }
+
+  function isSkillTool(name: string | undefined): boolean {
+    return name === "connect_skill";
   }
 
   function agentToolLabel(name: string): string {
@@ -286,6 +291,9 @@
       {:else if isMcpTool(b.name)}
         <Wrench size={12} />
         <span class="tool-row-label">{m.message_mcp_call()}</span>
+      {:else if isSkillTool(b.name)}
+        <Sparkles size={12} />
+        <span class="tool-row-label">{m.message_skill_call()}</span>
       {:else}
         <Wrench size={12} />
         <span class="tool-row-label">{m.message_tool_call()}</span>

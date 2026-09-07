@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Folder, FilePlus, FileEdit, FileX, Trash2, Settings2, Plus, CornerDownLeft } from "@lucide/svelte";
+  import { Folder, FilePlus, FileEdit, FileX, FileText, Trash2, Settings2, Plus, CornerDownLeft, Sparkles } from "@lucide/svelte";
   import * as ipc from "$lib/tauri";
-  import type { ProjectPath } from "$lib/tauri";
+  import type { ProjectContextSummary, ProjectPath } from "$lib/tauri";
   import {
     fileChanges,
     changedFileViews,
@@ -27,13 +27,25 @@
     }
   }
 
+  let ctxSummary = $state<ProjectContextSummary | null>(null);
+  async function loadCtx() {
+    try {
+      ctxSummary = await ipc.projectContextSummary(projectId);
+    } catch (e) {
+      console.error("projectContextSummary failed", e);
+      ctxSummary = null;
+    }
+  }
+
   onMount(() => {
     void loadPaths();
+    void loadCtx();
   });
 
   $effect(() => {
     void projectId;
     void loadPaths();
+    void loadCtx();
   });
 
   // Reload views on mount, on project switch and whenever a new file-changed
@@ -105,6 +117,27 @@
           </button>
         </div>
       {/each}
+    {/if}
+  </div>
+
+  <div class="ctx-section">
+    <div class="ctx-label"><span>{m.context_auto_title()}</span></div>
+    {#if !ctxSummary || (ctxSummary.rule_files.length === 0 && ctxSummary.skills.length === 0)}
+      <div class="ctx-empty">{m.context_no_auto()}</div>
+      <div class="ctx-hint">{m.context_auto_hint()}</div>
+    {:else}
+      {#if ctxSummary.rule_files.length > 0}
+        <div class="ctx-sub">{m.context_rule_files()}</div>
+        {#each ctxSummary.rule_files as f}
+          <div class="ctx-row"><FileText size={12} /><span class="ctx-name" title={f}>{f}</span></div>
+        {/each}
+      {/if}
+      {#if ctxSummary.skills.length > 0}
+        <div class="ctx-sub">{m.context_skills()}</div>
+        {#each ctxSummary.skills as s (s.id)}
+          <div class="ctx-row" title={s.description}><Sparkles size={12} /><span class="ctx-name">{s.id}</span></div>
+        {/each}
+      {/if}
     {/if}
   </div>
 
@@ -191,6 +224,34 @@
   .ctx-empty {
     font-size: 0.75rem;
     color: var(--muted-foreground);
+  }
+  .ctx-sub {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0.35rem 0 0.15rem;
+  }
+  .ctx-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0;
+    font-size: 0.72rem;
+    color: var(--foreground);
+  }
+  .ctx-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono);
+  }
+  .ctx-hint {
+    font-size: 0.68rem;
+    color: var(--muted-foreground);
+    margin-top: 0.2rem;
+    line-height: 1.3;
   }
   .path-row {
     display: flex;

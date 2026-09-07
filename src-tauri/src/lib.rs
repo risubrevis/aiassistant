@@ -1430,6 +1430,14 @@ async fn project_paths_list(
 }
 
 #[tauri::command]
+async fn project_context_summary(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<projects::ProjectContextSummary, String> {
+    Ok(projects::build_context_summary(&state.pool, &project_id).await)
+}
+
+#[tauri::command]
 async fn project_path_add(
     project_id: String,
     path: String,
@@ -1452,38 +1460,6 @@ async fn project_path_add(
     )
     .await
     .map_err(|e| e.to_string())?;
-    // Auto-import known rule files (AGENTS.md, CLAUDE.md, ...) as project rules.
-    if kind == "dir" {
-        let dir = std::path::Path::new(&path);
-        let existing = db::models::list_rules(&state.pool, "project", &project_id)
-            .await
-            .map_err(|e| e.to_string())?;
-        for (_marker, filename, _full, content) in projects::detect_rule_files(dir) {
-            let header = format!("[{}]\n", filename);
-            // Skip when an auto-imported rule for this file already exists.
-            if existing
-                .iter()
-                .any(|r| r.added_by.as_deref() == Some("auto") && r.text.starts_with(&header))
-            {
-                continue;
-            }
-            let rule_id = uuid::Uuid::new_v4().to_string();
-            let text = format!("{}{}", header, content);
-            db::models::add_rule(
-                &state.pool,
-                &rule_id,
-                "project",
-                &project_id,
-                filename.as_str(),
-                &text,
-                0,
-                Some("auto"),
-                now_ms(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-        }
-    }
     let pid_c = project_id.clone();
     state
         .watcher
@@ -1514,9 +1490,9 @@ async fn project_path_delete(
         .map_err(|e| e.to_string())?;
     if let Some(path_row) = path_row {
         if path_row.kind == "dir" {
-            // Auto-rules don't track their source dir, so match by known rule-file
-            // headers. If several attached dirs had the same rule file, removing one
-            // drops the shared auto-rule; re-adding the other dir re-imports it.
+            // Legacy auto-imported rule snapshots (added_by="auto") are no longer
+            // created — rule files are live-read each turn in rules.rs. Clean up any
+            // leftover legacy rows matching known rule-file headers on dir detach.
             let auto_rules = db::models::list_rules(&state.pool, "project", &project_id)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -2814,6 +2790,7 @@ pub fn run() {
             project_set_pinned,
             project_reorder,
             project_paths_list,
+            project_context_summary,
             project_path_add,
             project_path_delete,
             chat_paths_list,

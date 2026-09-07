@@ -588,6 +588,17 @@ export const projectSetPinned = (projectId: string, pinned: boolean) =>
   invoke<void>("project_set_pinned", { projectId, pinned });
 export const projectReorder = (orderedIds: string[]) =>
   invoke<void>("project_reorder", { orderedIds });
+export interface ProjectContextSkill {
+  id: string;
+  title: string;
+  description: string;
+}
+export interface ProjectContextSummary {
+  rule_files: string[];
+  skills: ProjectContextSkill[];
+}
+export const projectContextSummary = (projectId: string) =>
+  invoke<ProjectContextSummary>("project_context_summary", { projectId });
 export const projectPathsList = (projectId: string) =>
   invoke<ProjectPath[]>("project_paths_list", { projectId });
 export const projectPathAdd = (

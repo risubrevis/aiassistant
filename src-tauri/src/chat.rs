@@ -1303,19 +1303,19 @@ async fn run_turn(
         }
     }
 
-    // Project skills auto-discovery from .skills/ folders (IDEAS: auto-connect skills).
+    // Project skills auto-discovery from .agents/skills/ (and legacy .skills/) (IDEAS: auto-connect skills).
     let project_skills = if project.is_some() && cfg.defaults.mode != "minimal" {
         projects::discover_project_skills(&roots)
     } else {
         Vec::new()
     };
     if !project_skills.is_empty() {
-        let mut lines = vec!["Project skills available in the .skills/ folder:".to_string()];
+        let mut lines = vec!["Project skills available in .agents/skills/:".to_string()];
         for s in &project_skills {
-            lines.push(format!("- {}: {}", s.id, s.title));
+            lines.push(format!("- {}: {}", s.id, s.description));
         }
         lines.push(
-            "Use the connect_skill tool with a skill_id to load a skill's full instructions when the user's request matches a skill."
+            "Call the connect_skill tool with a skill_id to load a skill's full instructions when a request matches a skill. Supporting files in a skill's directory can be read with read_file using the dir path returned by connect_skill."
                 .to_string(),
         );
         let section = lines.join("\n");
@@ -2328,8 +2328,11 @@ async fn execute_ctx_tool(
                 return crate::tools::ToolResult::err(format!("skill not found: {skill_id}"));
             };
             crate::tools::ToolResult::ok(format!(
-                "<skill id=\"{}\" title=\"{}\">\n{}\n</skill>",
-                skill.id, skill.title, skill.body
+                "<skill id=\"{}\" title=\"{}\" dir=\"{}\">\n{}\n</skill>",
+                skill.id,
+                skill.title,
+                skill.dir.display(),
+                skill.body
             ))
         }
         _ => crate::tools::ToolResult::err("unknown context tool"),
