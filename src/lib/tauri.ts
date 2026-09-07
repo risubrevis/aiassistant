@@ -41,6 +41,14 @@ export interface NetworkTestResult {
   status: number | null;
 }
 
+export interface WebSearchConfig {
+  user_agent: string;
+  accept_language: string;
+  extra_headers: string;
+  timeout_ms: number;
+}
+export type WebSearchConfigInput = WebSearchConfig;
+
 export interface AppConfig {
   config_version: number;
   appearance: Appearance;
@@ -67,6 +75,7 @@ export interface AppConfig {
     max_bytes: number;
   };
   network: Network;
+  web_search: WebSearchConfig;
 }
 
 export interface AppPaths {
@@ -488,6 +497,8 @@ export const networkTest = (input: NetworkInput) =>
   invoke<NetworkTestResult>("network_test", { input });
 export const networkHasPassword = () => invoke<boolean>("network_has_password");
 export const clearProxyPassword = () => invoke<void>("clear_proxy_password");
+export const setWebSearch = (input: WebSearchConfigInput) =>
+  invoke<void>("set_web_search", { input });
 
 // --- updates ---
 
@@ -695,22 +706,56 @@ export const environmentDetect = () => invoke<string>("environment_detect");
 export const setAddEnvironmentInfo = (value: boolean) =>
   invoke<void>("set_add_environment_info", { value });
 
+export type WebSearchProviderKind =
+  | "scrape"
+  | "brave_api"
+  | "tavily_api"
+  | "serper_api"
+  | "exa_api"
+  | "custom_api";
+
 export interface WebSearchProvider {
   id: string;
   title: string;
   url: string;
   enabled: boolean;
   position: number;
+  kind: WebSearchProviderKind;
+  api_method: string;
+  auth_scheme: string; // "none" | "header" | "bearer"
+  auth_header: string;
+  body_template: string;
+  results_path: string;
+  title_field: string;
+  url_field: string;
+  snippet_field: string;
+  has_key: boolean;
 }
 export interface WebSearchProviderInput {
+  id: string;
   title: string;
   url: string;
   enabled: boolean;
+  kind: WebSearchProviderKind;
+  api_method: string;
+  auth_scheme: string;
+  auth_header: string;
+  body_template: string;
+  results_path: string;
+  title_field: string;
+  url_field: string;
+  snippet_field: string;
 }
 export const webSearchProvidersList = () =>
   invoke<WebSearchProvider[]>("web_search_providers_list");
 export const webSearchProvidersSave = (providers: WebSearchProviderInput[]) =>
   invoke<void>("web_search_providers_save", { providers });
+export const webSearchProviderSetKey = (id: string, key: string) =>
+  invoke<void>("web_search_provider_set_key", { id, key });
+export const webSearchProviderClearKey = (id: string) =>
+  invoke<void>("web_search_provider_clear_key", { id });
+export const webSearchProviderHasKey = (id: string) =>
+  invoke<boolean>("web_search_provider_has_key", { id });
 
 export const skillsList = () => invoke<Skill[]>("skills_list");
 export const skillsSave = (skills: Skill[]) =>

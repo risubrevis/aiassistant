@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 pub use model::{
     AgentContract, AppConfig as Config, EventSchema, GlobalRule, ModelRef, Network, Permissions,
-    Provider, Skill,
+    Provider, Skill, WebSearch,
 };
 use tracing::warn;
 
@@ -17,7 +17,7 @@ pub use write::{
     write_add_environment_info, write_auto_collapse_context_pct, write_auto_pull_changes,
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
     write_environment_info, write_logging_field, write_mode, write_network, write_rag_enabled,
-    write_system_prompt,
+    write_system_prompt, write_web_search,
 };
 
 /// App config directory: `config_dir/aiassistant` per-OS (XDG/AppData/Library).
@@ -185,6 +185,17 @@ test_url = "https://www.google.com"   # hit by the Test button
 verify_tls = true        # set false only for proxies with self-signed certificates
 ca_cert_path = ""        # optional PEM/DER file with a corporate proxy CA
 connect_timeout_ms = 10000
+
+[web_search]
+# User-Agent for the builtin web_search tool. Search engines block naive /
+# outdated UAs with a CAPTCHA, so this defaults to a current Chrome desktop
+# string. Override if a provider blocks the default.
+user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+accept_language = "en-US,en;q=0.9"
+# Extra request headers, one per line as `Key: Value` (appended after the
+# built-in browser-like headers; last wins on conflict). Empty = none.
+extra_headers = ""
+timeout_ms = 20000
 
 # Permission patterns by path/command. Last match wins.
 # allow | ask | deny. Combined with mode/toggles.

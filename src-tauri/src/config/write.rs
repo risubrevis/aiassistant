@@ -155,6 +155,18 @@ pub fn write_network(cfg: &super::Network) -> Result<()> {
     write_doc(doc)
 }
 
+/// Replace the whole `[web_search]` section in config.toml.
+pub fn write_web_search(cfg: &super::WebSearch) -> Result<()> {
+    let mut doc = load_doc()?;
+    let map: BTreeMap<&str, &super::WebSearch> = BTreeMap::from([("web_search", cfg)]);
+    let s = toml::to_string(&map).context("failed to serialize [web_search]")?;
+    let sub: toml_edit::DocumentMut = s
+        .parse()
+        .context("failed to parse serialized [web_search]")?;
+    doc["web_search"] = sub["web_search"].clone();
+    write_doc(doc)
+}
+
 /// Replace the `[defaults].disabled_tools` array in config.toml.
 pub fn write_disabled_tools(tools: &[String]) -> Result<()> {
     let mut doc = load_doc()?;
@@ -227,6 +239,32 @@ mod tests {
             cfg.defaults.main_model.as_ref().unwrap().model,
             "model-uuid"
         );
+        restore(bak);
+    }
+
+    #[test]
+    #[ignore = "writes to the real config dir (backed up)"]
+    fn roundtrip_web_search() {
+        let bak = backup();
+        let _ = crate::config::write_default_config(&config_path());
+        let ws = crate::config::WebSearch {
+            user_agent: "TestUA/1.0".into(),
+            accept_language: "de-DE,de;q=0.9".into(),
+            extra_headers: "X-Test: yes\n# comment\nBadLine\n\nX-Other: no".into(),
+            timeout_ms: 12345,
+        };
+        super::write_web_search(&ws).unwrap();
+        let cfg = load().unwrap();
+        assert_eq!(cfg.web_search.user_agent, "TestUA/1.0");
+        assert_eq!(cfg.web_search.accept_language, "de-DE,de;q=0.9");
+        assert_eq!(
+            cfg.web_search.extra_headers,
+            "X-Test: yes\n# comment\nBadLine\n\nX-Other: no"
+        );
+        assert_eq!(cfg.web_search.timeout_ms, 12345);
+        // re-reading the raw file parses (no corruption)
+        let raw = std::fs::read_to_string(config_path()).unwrap();
+        let _reparsed: crate::config::Config = toml::from_str(&raw).unwrap();
         restore(bak);
     }
 }

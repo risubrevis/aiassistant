@@ -64,6 +64,8 @@ pub struct AppConfig {
     pub logging: Logging,
     #[serde(default)]
     pub network: Network,
+    #[serde(default)]
+    pub web_search: WebSearch,
 }
 
 fn default_config_version() -> u32 {
@@ -227,6 +229,7 @@ impl Default for AppConfig {
             worktree: Worktree::default(),
             logging: Logging::default(),
             network: Network::default(),
+            web_search: WebSearch::default(),
         }
     }
 }
@@ -536,6 +539,48 @@ impl Default for Network {
             verify_tls: true,
             ca_cert_path: String::new(),
             connect_timeout_ms: default_connect_timeout_ms(),
+        }
+    }
+}
+
+/// Web search HTTP client settings (Settings → Web Search). Used by the
+/// builtin `web_search` tool to impersonate a desktop browser so search
+/// engines don't serve CAPTCHA / bot-challenge pages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSearch {
+    /// User-Agent string sent to search engines. Default = current Chrome stable desktop.
+    #[serde(default = "default_ws_user_agent")]
+    pub user_agent: String,
+    /// Accept-Language header value.
+    #[serde(default = "default_ws_accept_language")]
+    pub accept_language: String,
+    /// Extra request headers, one per line as `Key: Value`. Appended after the
+    /// built-in browser-like headers (last wins on conflict). Empty = none.
+    #[serde(default)]
+    pub extra_headers: String,
+    /// Per-request timeout, ms.
+    #[serde(default = "default_ws_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+fn default_ws_user_agent() -> String {
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+        .into()
+}
+fn default_ws_accept_language() -> String {
+    "en-US,en;q=0.9".into()
+}
+fn default_ws_timeout_ms() -> u64 {
+    20_000
+}
+
+impl Default for WebSearch {
+    fn default() -> Self {
+        Self {
+            user_agent: default_ws_user_agent(),
+            accept_language: default_ws_accept_language(),
+            extra_headers: String::new(),
+            timeout_ms: default_ws_timeout_ms(),
         }
     }
 }

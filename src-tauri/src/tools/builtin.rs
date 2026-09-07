@@ -52,16 +52,19 @@ static MD_CONVERTER: std::sync::LazyLock<HtmlToMarkdown> = std::sync::LazyLock::
 static TITLE_RE: std::sync::LazyLock<Option<Regex>> =
     std::sync::LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok());
 
-/// Realistic desktop browser UA — the polite `WEB_USER_AGENT` triggers
-/// bot-challenge walls on most search engines.
-const SEARCH_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+/// Chrome-desktop request headers for search-engine navigations; versions are
+/// kept in sync with the default `web_search.user_agent` (Chrome 152). They
+/// stay static when the user overrides the UA (known limitation).
+const SEARCH_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+const SEARCH_SEC_CH_UA: &str =
+    "\"Chromium\";v=\"152\", \"Google Chrome\";v=\"152\", \"Not?A_Brand\";v=\"24\"";
 
-fn search_client() -> reqwest::Client {
+fn search_client(ws: &crate::config::WebSearch) -> reqwest::Client {
     crate::net::apply(
         reqwest::Client::builder()
-            .user_agent(SEARCH_USER_AGENT)
+            .user_agent(&ws.user_agent)
             .redirect(reqwest::redirect::Policy::limited(5))
-            .timeout(std::time::Duration::from_secs(20)),
+            .timeout(std::time::Duration::from_millis(ws.timeout_ms)),
     )
     .build()
     .unwrap_or_else(|_| reqwest::Client::new())
@@ -2911,9 +2914,153 @@ fn is_nav_label(title: &str) -> bool {
     )
 }
 
+/// Last two DNS labels of a host — a coarse "registrable domain" guess that's
+/// good enough for the common search-engine TLDs (.com/.org/…). Used to group
+/// a search engine's own subdomains (blog.mojeek.com, brave.com, …) so they're
+/// filtered out of result lists and throttled together.
+fn registrable_domain(host: &str) -> String {
+    let parts: Vec<&str> = host.split('.').collect();
+    match parts.len() {
+        n if n >= 2 => parts[n - 2..].join("."),
+        _ => host.to_string(),
+    }
+}
+
+/// True if `url` belongs to the search engine itself (same registrable domain).
+/// Engines' own nav/footer/subdomain links must not leak into results.
+fn is_engine_self_link(url: &str, engine_host: &str) -> bool {
+    match host_of(url) {
+        Some(h) => registrable_domain(&h) == registrable_domain(engine_host),
+        None => false,
+    }
+}
+
+static TAG_RE: std::sync::LazyLock<Option<Regex>> =
+    std::sync::LazyLock::new(|| Regex::new(r"(?is)<[^>]+>").ok());
+
+/// Strip HTML tags and decode a few common entities, collapsing whitespace.
+fn strip_tags(s: &str) -> String {
+    let no_tags: String = match TAG_RE.as_ref() {
+        Some(re) => re.replace_all(s, "").into_owned(),
+        None => s.to_string(),
+    };
+    let decoded = no_tags
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&#x2F;", "/")
+        .replace("&#47;", "/")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// DuckDuckGo wraps every result URL in a redirect:
+/// `//duckduckgo.com/l/?uddg=<percent-encoded real URL>&rut=…`. Unwrap it to
+/// the real target; non-DDG hrefs are returned unchanged (with `//` normalized
+/// to `https://`).
+fn unwrap_ddg_redirect(href: &str) -> String {
+    let full = match href.strip_prefix("//") {
+        Some(rest) => format!("https://{rest}"),
+        None => href.to_string(),
+    };
+    let Ok(parsed) = reqwest::Url::parse(&full) else {
+        return full;
+    };
+    let host = parsed.host_str().unwrap_or("").to_lowercase();
+    if !(host == "duckduckgo.com" || host.ends_with(".duckduckgo.com"))
+        || !parsed.path().starts_with("/l/")
+    {
+        return full;
+    }
+    for (k, v) in parsed.query_pairs() {
+        if k == "uddg" {
+            return v.into_owned();
+        }
+    }
+    full
+}
+
+static DDG_ANCHOR_RE: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?is)<a\b[^>]*href="([^"]*uddg=[^"]*)"[^>]*>(.*?)</a>"#).ok()
+});
+static DDG_SNIPPET_HTML_RE: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?is)<a\b[^>]*class="result__snippet"[^>]*>(.*?)</a>"#).ok()
+});
+static DDG_SNIPPET_LITE_RE: std::sync::LazyLock<Option<Regex>> = std::sync::LazyLock::new(|| {
+    Regex::new(r#"(?is)<td\b[^>]*class="result-snippet"[^>]*>(.*?)</td>"#).ok()
+});
+
+/// DuckDuckGo result anchors use protocol-relative hrefs wrapped in a
+/// `uddg=` redirect — the generic markdown-link scanner misses them entirely.
+/// Parse them straight from the HTML instead.
+fn extract_ddg_results(html: &str, count: usize) -> Vec<String> {
+    let Some(anch) = DDG_ANCHOR_RE.as_ref() else {
+        return Vec::new();
+    };
+    let anchors: Vec<(String, String)> = anch
+        .captures_iter(html)
+        .filter_map(|c| {
+            let href = c.get(1)?.as_str().to_string();
+            let title = strip_tags(c.get(2)?.as_str());
+            Some((href, title))
+        })
+        .collect();
+    if anchors.is_empty() {
+        return Vec::new();
+    }
+    let snippets: Vec<String> = {
+        let mut v: Vec<String> = Vec::new();
+        if let Some(re) = DDG_SNIPPET_HTML_RE.as_ref() {
+            v = re
+                .captures_iter(html)
+                .map(|c| strip_tags(c.get(1).map(|m| m.as_str()).unwrap_or("")))
+                .collect();
+        }
+        if v.is_empty() {
+            if let Some(re) = DDG_SNIPPET_LITE_RE.as_ref() {
+                v = re
+                    .captures_iter(html)
+                    .map(|c| strip_tags(c.get(1).map(|m| m.as_str()).unwrap_or("")))
+                    .collect();
+            }
+        }
+        v
+    };
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for (i, (href, title)) in anchors.iter().enumerate() {
+        if out.len() >= count {
+            break;
+        }
+        let title = title.trim();
+        if title.is_empty() || is_nav_label(title) {
+            continue;
+        }
+        let url = unwrap_ddg_redirect(href);
+        if url.is_empty() || !seen.insert(url.clone()) {
+            continue;
+        }
+        let snippet = snippets.get(i).map(|s| s.trim()).filter(|s| !s.is_empty());
+        out.push(match snippet {
+            Some(s) => format!("- [{}]({})\n  {}", title, url, s),
+            None => format!("- [{}]({})", title, url),
+        });
+    }
+    out
+}
+
 /// Extract result links (title + url + optional snippet) from the page's
 /// markdown. Returns empty if fewer than 2 real external links are found.
 fn extract_search_results(html: &str, count: usize, engine_host: &str) -> Vec<String> {
+    let eng = engine_host.to_lowercase();
+    if eng == "duckduckgo.com" || eng.ends_with(".duckduckgo.com") {
+        let ddg = extract_ddg_results(html, count);
+        if ddg.len() >= 2 {
+            return ddg;
+        }
+    }
     let Some(re) = LINK_RE.as_ref() else {
         return Vec::new();
     };
@@ -2930,7 +3077,7 @@ fn extract_search_results(html: &str, count: usize, engine_host: &str) -> Vec<St
             if !title.is_empty()
                 && !url.is_empty()
                 && !is_nav_label(title)
-                && host_of(url).as_deref() != Some(engine_host)
+                && !is_engine_self_link(url, engine_host)
                 && seen.insert(url.to_string())
             {
                 let mut snippet = String::new();
@@ -2952,27 +3099,516 @@ fn extract_search_results(html: &str, count: usize, engine_host: &str) -> Vec<St
     out
 }
 
-async fn fetch_search_html(url: &str) -> Result<String, String> {
-    let req = search_client()
-        .get(url)
-        .header(
-            "Accept",
-            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        )
-        .header("Accept-Language", "en-US,en;q=0.9")
-        .send();
-    let resp = match tokio::time::timeout(std::time::Duration::from_secs(20), req).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(format!("request failed: {e}")),
-        Err(_) => return Err("request timed out".into()),
-    };
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {}", status.as_u16()));
+/// Minimum gap between consecutive requests to the same search engine
+/// (registrable domain). The LLM sometimes fires parallel `web_search` calls;
+/// without throttling, engines like Brave reply HTTP 429.
+static SEARCH_HOST_THROTTLE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+const SEARCH_HOST_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1100);
+
+async fn throttle_search_host(reg_domain: &str) {
+    if reg_domain.is_empty() {
+        return;
     }
-    resp.text()
+    let wait = {
+        let mut map = SEARCH_HOST_THROTTLE.lock().unwrap();
+        let now = std::time::Instant::now();
+        let reserved = map.get(reg_domain).copied().unwrap_or(now);
+        let wait = reserved.saturating_duration_since(now);
+        map.insert(
+            reg_domain.to_string(),
+            now + wait + SEARCH_HOST_MIN_INTERVAL,
+        );
+        wait
+    };
+    if !wait.is_zero() {
+        tokio::time::sleep(wait).await;
+    }
+}
+
+fn build_search_request(ws: &crate::config::WebSearch, url: &str) -> reqwest::RequestBuilder {
+    let mut req = search_client(ws)
+        .get(url)
+        .header("Accept", SEARCH_ACCEPT)
+        .header("sec-ch-ua", SEARCH_SEC_CH_UA)
+        .header("sec-ch-ua-mobile", "?0")
+        .header("sec-ch-ua-platform", "\"Windows\"")
+        .header("sec-fetch-dest", "document")
+        .header("sec-fetch-mode", "navigate")
+        .header("sec-fetch-site", "none")
+        .header("sec-fetch-user", "?1")
+        .header("upgrade-insecure-requests", "1");
+    let lang = ws.accept_language.trim();
+    if !lang.is_empty() {
+        req = req.header("Accept-Language", lang);
+    }
+    for line in ws.extra_headers.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            let (k, v) = (k.trim(), v.trim());
+            if !k.is_empty() && !v.is_empty() {
+                req = req.header(k, v);
+            }
+        }
+    }
+    req
+}
+
+async fn fetch_search_html(url: &str) -> Result<String, String> {
+    let ws = match crate::config::load() {
+        Ok(cfg) => cfg.web_search,
+        Err(_) => crate::config::WebSearch::default(),
+    };
+    // reqwest auto-injects `Accept-Encoding: gzip, deflate, br` and decompresses
+    // the response transparently (features enabled in Cargo.toml).
+    let reg_domain = host_of(url)
+        .map(|h| registrable_domain(&h))
+        .unwrap_or_default();
+    throttle_search_host(&reg_domain).await;
+
+    let mut attempts = 0u8;
+    loop {
+        let resp = match tokio::time::timeout(
+            std::time::Duration::from_millis(ws.timeout_ms),
+            build_search_request(&ws, url).send(),
+        )
         .await
-        .map_err(|e| format!("read body failed: {e}"))
+        {
+            Ok(Ok(r)) => r,
+            Ok(Err(e)) => return Err(format!("request failed: {e}")),
+            Err(_) => return Err("request timed out".into()),
+        };
+        let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempts == 0 {
+            // Honor a short Retry-After once, then fall through to the next engine.
+            let wait = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|&s| s <= 5)
+                .map(std::time::Duration::from_secs);
+            if let Some(d) = wait {
+                tokio::time::sleep(d).await;
+                attempts += 1;
+                continue;
+            }
+            return Err("HTTP 429 (rate limited)".into());
+        }
+        if !status.is_success() {
+            return Err(format!("HTTP {}", status.as_u16()));
+        }
+        return resp
+            .text()
+            .await
+            .map_err(|e| format!("read body failed: {e}"));
+    }
+}
+
+/// Timeout for API search requests: reuses the scrape `web_search.timeout_ms`.
+fn search_timeout_ms() -> u64 {
+    match crate::config::load() {
+        Ok(cfg) => cfg.web_search.timeout_ms,
+        Err(_) => crate::config::WebSearch::default().timeout_ms,
+    }
+}
+
+/// Plain HTTP client for JSON search APIs (no browser impersonation needed).
+fn api_client(timeout_ms: u64) -> reqwest::Client {
+    crate::net::apply(
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .timeout(std::time::Duration::from_millis(timeout_ms)),
+    )
+    .build()
+    .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// Fully rendered HTTP request for an API search call.
+struct ApiRequestSpec {
+    method: &'static str,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Option<String>,
+}
+
+/// Hardcoded request specs for the built-in API presets.
+fn build_preset_request(
+    kind: &str,
+    key: &str,
+    query: &str,
+    encoded: &str,
+    count: usize,
+) -> Result<ApiRequestSpec, String> {
+    match kind {
+        "brave_api" => Ok(ApiRequestSpec {
+            method: "GET",
+            url: format!(
+                "https://api.search.brave.com/res/v1/web/search?q={encoded}&count={count}"
+            ),
+            headers: vec![
+                ("X-Subscription-Token".to_string(), key.to_string()),
+                ("Accept".to_string(), "application/json".to_string()),
+            ],
+            body: None,
+        }),
+        "tavily_api" => Ok(ApiRequestSpec {
+            method: "POST",
+            url: "https://api.tavily.com/search".to_string(),
+            headers: vec![
+                ("Authorization".to_string(), format!("Bearer {key}")),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: Some(serde_json::json!({ "query": query, "max_results": count }).to_string()),
+        }),
+        "serper_api" => Ok(ApiRequestSpec {
+            method: "POST",
+            url: "https://google.serper.dev/search".to_string(),
+            headers: vec![
+                ("X-API-KEY".to_string(), key.to_string()),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: Some(serde_json::json!({ "q": query, "num": count }).to_string()),
+        }),
+        "exa_api" => Ok(ApiRequestSpec {
+            method: "POST",
+            url: "https://api.exa.ai/search".to_string(),
+            headers: vec![
+                ("x-api-key".to_string(), key.to_string()),
+                ("Content-Type".to_string(), "application/json".to_string()),
+            ],
+            body: Some(serde_json::json!({ "query": query, "numResults": count }).to_string()),
+        }),
+        _ => Err(format!("unknown API preset: {kind}")),
+    }
+}
+
+/// Follow a dotted path (e.g. "web.results") through JSON objects and return
+/// the array at the leaf. Empty path = the root itself as an array.
+fn json_path_array<'a>(root: &'a Value, path: &str) -> Option<&'a Vec<Value>> {
+    let path = path.trim();
+    if path.is_empty() {
+        return root.as_array();
+    }
+    let mut parts = path.split('.');
+    let last = parts.next_back().unwrap_or("");
+    let mut cur = root;
+    for part in parts {
+        cur = cur.get(part)?;
+    }
+    cur.get(last).and_then(|v| v.as_array())
+}
+
+/// Parse a preset API response body into formatted result lines.
+fn parse_preset_results(kind: &str, body: &str, count: usize) -> Vec<String> {
+    let (path, title_field, url_field, snippet_field): (&str, &str, &str, &str) = match kind {
+        "brave_api" => ("web.results", "title", "url", "description"),
+        "tavily_api" => ("results", "title", "url", "content"),
+        "serper_api" => ("organic", "title", "link", "snippet"),
+        "exa_api" => ("results", "title", "url", "text"),
+        _ => return Vec::new(),
+    };
+    let Ok(root) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
+    let Some(arr) = json_path_array(&root, path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for item in arr {
+        if out.len() >= count {
+            break;
+        }
+        let title = item
+            .get(title_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let url = item
+            .get(url_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if title.is_empty() || url.is_empty() {
+            continue;
+        }
+        let snippet = match kind {
+            // Brave descriptions can contain HTML tags.
+            "brave_api" => strip_tags(
+                item.get(snippet_field)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+            ),
+            // Exa: `text` when present, otherwise `summary`.
+            "exa_api" => item
+                .get("text")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| item.get("summary").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+            _ => item
+                .get(snippet_field)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+        };
+        out.push(if snippet.is_empty() {
+            format!("- [{title}]({url})")
+        } else {
+            format!("- [{title}]({url})\n  {snippet}")
+        });
+    }
+    out
+}
+
+/// Substitute `"{query}"` / `"{count}"` tokens (including the surrounding
+/// quotes) with JSON-encoded values, then validate the result parses as JSON.
+fn render_custom_body(template: &str, query: &str, count: usize) -> Result<String, String> {
+    let substituted = template
+        .replace("\"{query}\"", &serde_json::json!(query).to_string())
+        .replace("\"{count}\"", &serde_json::json!(count).to_string());
+    let value: Value =
+        serde_json::from_str(&substituted).map_err(|e| format!("invalid body template: {e}"))?;
+    Ok(value.to_string())
+}
+
+/// Parse a custom API response into formatted result lines using the
+/// provider's field mapping.
+fn parse_custom_results(
+    body: &str,
+    results_path: &str,
+    title_field: &str,
+    url_field: &str,
+    snippet_field: &str,
+) -> Vec<String> {
+    let Ok(root) = serde_json::from_str::<Value>(body) else {
+        return Vec::new();
+    };
+    let Some(arr) = json_path_array(&root, results_path) else {
+        return Vec::new();
+    };
+    let title_field = title_field.trim();
+    let url_field = url_field.trim();
+    let snippet_field = snippet_field.trim();
+    let mut out = Vec::new();
+    for item in arr {
+        let title = item
+            .get(title_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let url = item
+            .get(url_field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if title.is_empty() || url.is_empty() {
+            continue;
+        }
+        let snippet = item
+            .get(snippet_field)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("");
+        out.push(if snippet.is_empty() {
+            format!("- [{title}]({url})")
+        } else {
+            format!("- [{title}]({url})\n  {snippet}")
+        });
+    }
+    out
+}
+
+/// Send one API request with host throttling and a single 429 retry (short
+/// `Retry-After` only), mirroring the scrape path's politeness rules.
+async fn send_api_request(
+    client: reqwest::Client,
+    method: &str,
+    url: &str,
+    headers: Vec<(String, String)>,
+    body: Option<String>,
+    timeout_ms: u64,
+) -> Result<reqwest::Response, String> {
+    let reg_domain = host_of(url)
+        .map(|h| registrable_domain(&h))
+        .unwrap_or_default();
+    throttle_search_host(&reg_domain).await;
+
+    let mut attempts = 0u8;
+    loop {
+        let mut req = match method.to_ascii_uppercase().as_str() {
+            "POST" => client.post(url),
+            _ => client.get(url),
+        };
+        for (k, v) in &headers {
+            match (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(v),
+            ) {
+                (Ok(name), Ok(value)) => req = req.header(name, value),
+                _ => return Err(format!("invalid header: {k}")),
+            }
+        }
+        if let Some(b) = &body {
+            req = req.body(b.clone());
+        }
+        let resp =
+            match tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), req.send())
+                .await
+            {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => return Err(format!("request failed: {e}")),
+                Err(_) => return Err("request timed out".into()),
+            };
+        let status = resp.status();
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS && attempts == 0 {
+            // Honor a short Retry-After once, then give up for this provider.
+            let wait = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .filter(|&s| s <= 5)
+                .map(std::time::Duration::from_secs);
+            if let Some(d) = wait {
+                tokio::time::sleep(d).await;
+                attempts += 1;
+                continue;
+            }
+            return Err("HTTP 429 (rate limited)".into());
+        }
+        if !status.is_success() {
+            return Err(format!("HTTP {}", status.as_u16()));
+        }
+        return Ok(resp);
+    }
+}
+
+/// Call one of the built-in JSON search API presets and return formatted lines.
+async fn fetch_api_preset(
+    p: &crate::db::models::WebSearchProvider,
+    query: &str,
+    count: usize,
+    encoded: &str,
+) -> Result<Vec<String>, String> {
+    let kind = p.kind.as_str();
+    let key = crate::secrets::get_web_search_api_key(&p.id)
+        .ok_or_else(|| "no API key set".to_string())?;
+    let count = count.min(20);
+    let spec = build_preset_request(kind, &key, query, encoded, count)?;
+    let timeout_ms = search_timeout_ms();
+    let resp = send_api_request(
+        api_client(timeout_ms),
+        spec.method,
+        &spec.url,
+        spec.headers,
+        spec.body,
+        timeout_ms,
+    )
+    .await?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("read body failed: {e}"))?;
+    Ok(parse_preset_results(kind, &body, count))
+}
+
+/// Call a user-configured JSON search API and return formatted lines.
+async fn fetch_api_custom(
+    p: &crate::db::models::WebSearchProvider,
+    query: &str,
+    count: usize,
+    encoded: &str,
+) -> Result<Vec<String>, String> {
+    let method_upper = p.api_method.trim().to_ascii_uppercase();
+    let method: &str = if method_upper.is_empty() {
+        "GET"
+    } else {
+        &method_upper
+    };
+    let url = build_search_url(&p.url, encoded);
+    let mut headers: Vec<(String, String)> = Vec::new();
+    let scheme = p.auth_scheme.trim().to_ascii_lowercase();
+    match scheme.as_str() {
+        "bearer" => {
+            let key = crate::secrets::get_web_search_api_key(&p.id)
+                .ok_or_else(|| "no API key set".to_string())?;
+            headers.push(("Authorization".into(), format!("Bearer {key}")));
+        }
+        "header" => {
+            let key = crate::secrets::get_web_search_api_key(&p.id)
+                .ok_or_else(|| "no API key set".to_string())?;
+            let name = p.auth_header.trim();
+            if name.is_empty() {
+                return Err("auth header name is empty".into());
+            }
+            headers.push((name.to_string(), key));
+        }
+        // "none" (or unset): no auth header.
+        _ => {}
+    }
+    let body = if method == "POST" && !p.body_template.trim().is_empty() {
+        Some(render_custom_body(p.body_template.trim(), query, count)?)
+    } else {
+        None
+    };
+    if body.is_some() {
+        headers.push(("Content-Type".into(), "application/json".into()));
+    }
+    let timeout_ms = search_timeout_ms();
+    let resp = send_api_request(
+        api_client(timeout_ms),
+        method,
+        &url,
+        headers,
+        body,
+        timeout_ms,
+    )
+    .await?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("read body failed: {e}"))?;
+    let mut results = parse_custom_results(
+        &text,
+        &p.results_path,
+        &p.title_field,
+        &p.url_field,
+        &p.snippet_field,
+    );
+    results.truncate(count);
+    Ok(results)
+}
+
+/// Built-in fallback provider when no providers are configured/enabled.
+fn default_scrape_provider() -> crate::db::models::WebSearchProvider {
+    crate::db::models::WebSearchProvider {
+        id: String::new(),
+        title: "DuckDuckGo Lite".into(),
+        url: "https://lite.duckduckgo.com/lite/?q={query}".into(),
+        enabled: 1,
+        position: 0,
+        created_at: 0,
+        updated_at: 0,
+        kind: "scrape".into(),
+        api_method: String::new(),
+        auth_scheme: String::new(),
+        auth_header: String::new(),
+        body_template: String::new(),
+        results_path: String::new(),
+        title_field: String::new(),
+        url_field: String::new(),
+        snippet_field: String::new(),
+        has_key: 0,
+    }
 }
 
 /// Web search via user-configured providers (Settings → Web Search), with a
@@ -3009,38 +3645,41 @@ impl Tool for WebSearch {
             .clamp(1, 20) as usize;
         let encoded = percent_encode_query(query);
 
-        let providers: Vec<(String, String)> = match crate::tools::db_pool() {
+        let providers: Vec<crate::db::models::WebSearchProvider> = match crate::tools::db_pool() {
             Some(pool) => crate::db::models::list_enabled_web_search_providers(pool)
                 .await
-                .map(|v| v.into_iter().map(|p| (p.title, p.url)).collect())
                 .unwrap_or_default(),
             None => Vec::new(),
         };
         // Fallback to a sane default if the DB is unavailable or nothing is enabled.
-        let providers: Vec<(String, String)> = if providers.is_empty() {
-            vec![(
-                "DuckDuckGo Lite".into(),
-                "https://lite.duckduckgo.com/lite/?q={query}".into(),
-            )]
+        let providers = if providers.is_empty() {
+            vec![default_scrape_provider()]
         } else {
             providers
         };
 
         let mut notes: Vec<String> = Vec::new();
-        for (title, url_tpl) in &providers {
-            let url = build_search_url(url_tpl, &encoded);
-            let host = host_of(url_tpl).unwrap_or_default();
-            match fetch_search_html(&url).await {
-                Ok(html) => {
-                    if is_bot_block(&html) {
-                        notes.push(format!("{title}: blocked (bot challenge)"));
-                        continue;
+        for p in &providers {
+            let title = &p.title;
+            let outcome = match p.kind.as_str() {
+                "brave_api" | "tavily_api" | "serper_api" | "exa_api" => {
+                    fetch_api_preset(p, query, count, &encoded).await
+                }
+                "custom_api" => fetch_api_custom(p, query, count, &encoded).await,
+                _ => {
+                    let url = build_search_url(&p.url, &encoded);
+                    let host = host_of(&p.url).unwrap_or_default();
+                    match fetch_search_html(&url).await {
+                        Ok(html) if is_bot_block(&html) => {
+                            Err("blocked (bot challenge)".to_string())
+                        }
+                        Ok(html) => Ok(extract_search_results(&html, count, &host)),
+                        Err(e) => Err(e),
                     }
-                    let results = extract_search_results(&html, count, &host);
-                    if results.len() < 2 {
-                        notes.push(format!("{title}: no results"));
-                        continue;
-                    }
+                }
+            };
+            match outcome {
+                Ok(results) if results.len() >= 2 => {
                     let mut out = format!(
                         "Search: {title}\nQuery: {query}\n\n{}",
                         results.join("\n\n")
@@ -3053,6 +3692,7 @@ impl Tool for WebSearch {
                     }
                     return ToolResult::ok(out);
                 }
+                Ok(_) => notes.push(format!("{title}: no results")),
                 Err(e) => notes.push(format!("{title}: {e}")),
             }
         }
@@ -5781,6 +6421,89 @@ mod tests {
         assert!(md_results.len() >= 2, "got: {md_results:?}");
     }
 
+    #[test]
+    fn registrable_domain_basic() {
+        assert_eq!(registrable_domain("blog.mojeek.com"), "mojeek.com");
+        assert_eq!(registrable_domain("search.brave.com"), "brave.com");
+        assert_eq!(registrable_domain("mojeek.com"), "mojeek.com");
+        assert_eq!(registrable_domain("lite.duckduckgo.com"), "duckduckgo.com");
+    }
+
+    #[test]
+    fn is_engine_self_link_filters_subdomain() {
+        assert!(is_engine_self_link(
+            "https://blog.mojeek.com/post",
+            "mojeek.com"
+        ));
+        assert!(is_engine_self_link(
+            "https://brave.com/about",
+            "search.brave.com"
+        ));
+        assert!(!is_engine_self_link(
+            "https://www.python.org/downloads",
+            "mojeek.com"
+        ));
+    }
+
+    #[test]
+    fn strip_tags_decodes_entities() {
+        assert_eq!(strip_tags("<b>Python &#x2F; tool</b>"), "Python / tool");
+        assert_eq!(strip_tags("hello &amp; world"), "hello & world");
+    }
+
+    #[test]
+    fn unwrap_ddg_redirect_decodes_uddg() {
+        assert_eq!(
+            unwrap_ddg_redirect(
+                "//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2Fdownloads%2F&amp;rut=abc"
+            ),
+            "https://www.python.org/downloads/"
+        );
+        assert_eq!(
+            unwrap_ddg_redirect("https://example.com/foo"),
+            "https://example.com/foo"
+        );
+    }
+
+    #[test]
+    fn extract_ddg_results_parses_html() {
+        let html = r#"<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2Fdownloads%2F&amp;rut=abc">Latest Python Release</a><a class="result__snippet">Python 3.13 is the latest.</a><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdevguide.python.org%2Fversions%2F&amp;rut=def">Python Versions</a><a class="result__snippet">Version status.</a>"#;
+        let res = extract_ddg_results(html, 8);
+        assert!(res.len() >= 2, "got: {res:?}");
+        assert!(
+            res.iter()
+                .any(|r| r.contains("https://www.python.org/downloads/")),
+            "missing python.org, got: {res:?}"
+        );
+        assert!(
+            res.iter()
+                .any(|r| r.contains("https://devguide.python.org/versions/")),
+            "missing devguide, got: {res:?}"
+        );
+    }
+
+    #[test]
+    fn extract_ddg_results_parses_lite() {
+        let html = r#"<tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2Fdownloads%2F&amp;rut=abc" class='result-link'>Latest Python Release</a></td></tr><tr><td class="result-snippet">Python 3.13 is the latest.</td></tr><tr><td><a rel="nofollow" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdevguide.python.org%2Fversions%2F&amp;rut=def" class='result-link'>Python Versions</a></td></tr><tr><td class="result-snippet">Version status.</td></tr>"#;
+        let res = extract_ddg_results(html, 8);
+        assert!(res.len() >= 2, "got: {res:?}");
+        assert!(
+            res.iter()
+                .any(|r| r.contains("https://www.python.org/downloads/")),
+            "missing python.org, got: {res:?}"
+        );
+    }
+
+    #[test]
+    fn extract_search_results_dispatches_ddg() {
+        let html = r#"<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.python.org%2Fdownloads%2F&amp;rut=abc">Latest Python Release</a><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fdevguide.python.org%2Fversions%2F&amp;rut=def">Python Versions</a>"#;
+        let res = extract_search_results(html, 8, "html.duckduckgo.com");
+        assert!(res.len() >= 2, "got: {res:?}");
+        assert!(res
+            .iter()
+            .any(|r| r.contains("https://www.python.org/downloads/")));
+    }
+
     #[tokio::test]
     async fn web_hook_list_empty_without_db() {
         let r = WebHookList.execute(json!({})).await;
@@ -5847,5 +6570,113 @@ mod tests {
             configured_host(raw).as_deref(),
             url_host(&rendered).as_deref()
         );
+    }
+
+    #[test]
+    fn json_path_array_descends_nested_path() {
+        let root: Value =
+            serde_json::from_str(r#"{"web":{"results":[{"title":"a","url":"u"}]}}"#).unwrap();
+        let arr = json_path_array(&root, "web.results").unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["title"], "a");
+        assert_eq!(arr[0]["url"], "u");
+    }
+
+    #[test]
+    fn json_path_array_top_level() {
+        let root: Value = serde_json::from_str(r#"{"results":[{"title":"a","url":"u"}]}"#).unwrap();
+        let arr = json_path_array(&root, "results").unwrap();
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[test]
+    fn json_path_array_empty_path_returns_root_array() {
+        let root: Value = serde_json::from_str(r#"[{"title":"a","url":"u"}]"#).unwrap();
+        let arr = json_path_array(&root, "").unwrap();
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[test]
+    fn parse_preset_results_brave_strips_html() {
+        let body = r#"{"web":{"results":[
+            {"title":"Brave One","url":"https://a.example/1","description":"<b>fast</b> &amp; private"},
+            {"title":"Brave Two","url":"https://a.example/2","description":"second"}
+        ]}}"#;
+        let out = parse_preset_results("brave_api", body, 5);
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out[0],
+            "- [Brave One](https://a.example/1)\n  fast & private"
+        );
+        assert_eq!(out[1], "- [Brave Two](https://a.example/2)\n  second");
+    }
+
+    #[test]
+    fn parse_preset_results_tavily() {
+        let body = r#"{"results":[{"title":"Tavily One","url":"https://b.example/1","content":"answer"}]}"#;
+        let out = parse_preset_results("tavily_api", body, 5);
+        assert_eq!(out, vec!["- [Tavily One](https://b.example/1)\n  answer"]);
+    }
+
+    #[test]
+    fn parse_preset_results_serper_uses_link_field() {
+        let body = r#"{"organic":[
+            {"title":"Serper One","link":"https://c.example/1","snippet":"serp text"}
+        ]}"#;
+        let out = parse_preset_results("serper_api", body, 5);
+        assert_eq!(
+            out,
+            vec!["- [Serper One](https://c.example/1)\n  serp text"]
+        );
+    }
+
+    #[test]
+    fn parse_preset_results_exa_falls_back_to_summary() {
+        let body = r#"{"results":[
+            {"title":"Exa One","url":"https://d.example/1","summary":"sum text"},
+            {"title":"Exa Two","url":"https://d.example/2","text":"main text"}
+        ]}"#;
+        let out = parse_preset_results("exa_api", body, 5);
+        assert_eq!(out[0], "- [Exa One](https://d.example/1)\n  sum text");
+        assert_eq!(out[1], "- [Exa Two](https://d.example/2)\n  main text");
+    }
+
+    #[test]
+    fn parse_preset_results_respects_count() {
+        let body = r#"{"results":[
+            {"title":"a","url":"https://x/1"},{"title":"b","url":"https://x/2"},
+            {"title":"c","url":"https://x/3"}
+        ]}"#;
+        let out = parse_preset_results("tavily_api", body, 2);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn parse_custom_results_navigates_path_and_skips_incomplete() {
+        let body = r#"{"data":{"items":[
+            {"name":"Custom One","href":"https://e.example/1","desc":"first"},
+            {"name":"No Url","href":""},
+            {"href":"https://e.example/3"}
+        ]}}"#;
+        let out = parse_custom_results(body, "data.items", "name", "href", "desc");
+        assert_eq!(out, vec!["- [Custom One](https://e.example/1)\n  first"]);
+    }
+
+    #[test]
+    fn render_custom_body_substitutes_tokens_with_json_values() {
+        let body = render_custom_body(
+            r#"{"q":"{query}","num":"{count}"}"#,
+            "rust \"async\" & await",
+            5,
+        )
+        .unwrap();
+        let val: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(val["q"].as_str(), Some("rust \"async\" & await"));
+        assert_eq!(val["num"].as_i64(), Some(5));
+    }
+
+    #[test]
+    fn render_custom_body_rejects_non_json_template() {
+        assert!(render_custom_body("not json", "q", 5).is_err());
     }
 }

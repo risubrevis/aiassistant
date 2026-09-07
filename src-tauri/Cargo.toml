@@ -1,6 +1,6 @@
 [package]
 name = "aiassistant"
-version = "1.0.13"
+version = "1.0.15"
 description = "Provider-agnostic desktop app for chatting with LLMs and working on code projects."
 authors = ["AIAssistant"]
 edition = "2021"
@@ -39,7 +39,7 @@ tracing-subscriber = "0.3"
 tracing-appender = "0.2"
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "process"] }
 async-trait = "0.1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "system-proxy", "socks"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "system-proxy", "socks", "gzip", "deflate", "brotli"] }
 futures = "0.3"
 eventsource-stream = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "ico", "gif", "bmp", "webp"] }

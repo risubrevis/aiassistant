@@ -183,6 +183,44 @@ fn set_network(input: NetworkInput, state: State<AppState>, app: AppHandle) -> R
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct WebSearchConfigInput {
+    user_agent: String,
+    accept_language: String,
+    extra_headers: String,
+    timeout_ms: u64,
+}
+
+impl WebSearchConfigInput {
+    fn to_config(&self) -> config::WebSearch {
+        config::WebSearch {
+            user_agent: self.user_agent.clone(),
+            accept_language: self.accept_language.clone(),
+            extra_headers: self.extra_headers.clone(),
+            timeout_ms: self.timeout_ms,
+        }
+    }
+}
+
+#[tauri::command]
+fn set_web_search(
+    input: WebSearchConfigInput,
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let ua = input.user_agent.trim();
+    if ua.is_empty() {
+        return Err("user_agent must not be empty".into());
+    }
+    let cfg = input.to_config();
+    config::write_web_search(&cfg).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.web_search = cfg;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn network_test(input: NetworkInput) -> Result<net::NetworkTestResult, String> {
     let net = input.to_network();
@@ -1648,12 +1686,55 @@ async fn web_search_providers_save(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
+    let before: Vec<String> = db::models::list_web_search_providers(&state.pool)
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    let kept: std::collections::HashSet<String> = providers
+        .iter()
+        .filter(|p| !p.id.is_empty())
+        .map(|p| p.id.clone())
+        .collect();
     db::models::replace_web_search_providers(&state.pool, &providers)
         .await
         .map_err(|e| e.to_string())?;
+    // Drop keyring keys of providers removed by this save.
+    for id in before.into_iter().filter(|id| !kept.contains(id)) {
+        let _ = crate::secrets::delete_web_search_api_key(&id);
+    }
     app.emit("web_search:reloaded", ())
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+async fn web_search_provider_set_key(
+    id: String,
+    key: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    crate::secrets::set_web_search_api_key(&id, &key).map_err(|e| e.to_string())?;
+    db::models::set_web_search_provider_has_key(&state.pool, &id, true)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn web_search_provider_clear_key(
+    id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _ = crate::secrets::delete_web_search_api_key(&id);
+    db::models::set_web_search_provider_has_key(&state.pool, &id, false)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn web_search_provider_has_key(id: String) -> Result<bool, String> {
+    Ok(crate::secrets::get_web_search_api_key(&id).is_some())
 }
 
 #[tauri::command]
@@ -2859,6 +2940,10 @@ pub fn run() {
             global_rules_save,
             web_search_providers_list,
             web_search_providers_save,
+            web_search_provider_set_key,
+            web_search_provider_clear_key,
+            web_search_provider_has_key,
+            set_web_search,
             web_hooks_list,
             web_hooks_create,
             web_hooks_update,

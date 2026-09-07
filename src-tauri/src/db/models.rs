@@ -1435,9 +1435,19 @@ pub struct WebSearchProvider {
     pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub kind: String,
+    pub api_method: String,
+    pub auth_scheme: String,
+    pub auth_header: String,
+    pub body_template: String,
+    pub results_path: String,
+    pub title_field: String,
+    pub url_field: String,
+    pub snippet_field: String,
+    pub has_key: i64,
 }
 
-/// Frontend-facing shape (enabled as bool).
+/// Frontend-facing shape (enabled/has_key as bool).
 #[derive(Debug, Clone, Serialize)]
 #[allow(dead_code)]
 pub struct WebSearchProviderView {
@@ -1446,26 +1456,55 @@ pub struct WebSearchProviderView {
     pub url: String,
     pub enabled: bool,
     pub position: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub kind: String,
+    pub api_method: String,
+    pub auth_scheme: String,
+    pub auth_header: String,
+    pub body_template: String,
+    pub results_path: String,
+    pub title_field: String,
+    pub url_field: String,
+    pub snippet_field: String,
+    pub has_key: bool,
 }
 
-/// Input for replacing the whole provider list (frontend Save).
+/// Input for replacing the whole provider list (frontend Save). An empty `id`
+/// creates a new provider; API keys are managed by dedicated commands.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub struct WebSearchProviderInput {
+    pub id: String,
     pub title: String,
     pub url: String,
     pub enabled: bool,
+    pub kind: String,
+    pub api_method: String,
+    pub auth_scheme: String,
+    pub auth_header: String,
+    pub body_template: String,
+    pub results_path: String,
+    pub title_field: String,
+    pub url_field: String,
+    pub snippet_field: String,
 }
+
+const WEB_SEARCH_PROVIDER_COLUMNS: &str =
+    "id, title, url, enabled, position, created_at, updated_at, \
+ kind, api_method, auth_scheme, auth_header, body_template, results_path, title_field, \
+ url_field, snippet_field, has_key";
 
 /// List all providers ordered by position then created_at, mapped to the view shape.
 #[allow(dead_code)]
 pub async fn list_web_search_providers(pool: &SqlitePool) -> Result<Vec<WebSearchProviderView>> {
-    let rows = sqlx::query_as::<_, WebSearchProvider>(
-        "SELECT id, title, url, enabled, position, created_at, updated_at \
-         FROM web_search_tool_providers ORDER BY position ASC, created_at ASC",
-    )
-    .fetch_all(pool)
-    .await?;
+    let sql = format!(
+        "SELECT {} FROM web_search_tool_providers ORDER BY position ASC, created_at ASC",
+        WEB_SEARCH_PROVIDER_COLUMNS
+    );
+    let rows = sqlx::query_as::<_, WebSearchProvider>(&sql)
+        .fetch_all(pool)
+        .await?;
     Ok(rows
         .into_iter()
         .map(|r| WebSearchProviderView {
@@ -1474,6 +1513,18 @@ pub async fn list_web_search_providers(pool: &SqlitePool) -> Result<Vec<WebSearc
             url: r.url,
             enabled: r.enabled == 1,
             position: r.position,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+            kind: r.kind,
+            api_method: r.api_method,
+            auth_scheme: r.auth_scheme,
+            auth_header: r.auth_header,
+            body_template: r.body_template,
+            results_path: r.results_path,
+            title_field: r.title_field,
+            url_field: r.url_field,
+            snippet_field: r.snippet_field,
+            has_key: r.has_key == 1,
         })
         .collect())
 }
@@ -1483,17 +1534,21 @@ pub async fn list_web_search_providers(pool: &SqlitePool) -> Result<Vec<WebSearc
 pub async fn list_enabled_web_search_providers(
     pool: &SqlitePool,
 ) -> Result<Vec<WebSearchProvider>> {
-    let rows = sqlx::query_as::<_, WebSearchProvider>(
-        "SELECT id, title, url, enabled, position, created_at, updated_at \
-         FROM web_search_tool_providers WHERE enabled = 1 ORDER BY position ASC, created_at ASC",
-    )
-    .fetch_all(pool)
-    .await?;
+    let sql = format!(
+        "SELECT {} FROM web_search_tool_providers WHERE enabled = 1 \
+         ORDER BY position ASC, created_at ASC",
+        WEB_SEARCH_PROVIDER_COLUMNS
+    );
+    let rows = sqlx::query_as::<_, WebSearchProvider>(&sql)
+        .fetch_all(pool)
+        .await?;
     Ok(rows)
 }
 
-/// Replace all providers (delete + insert) with the given list. Position is the
-/// array index; ids are regenerated.
+/// Replace the provider list with upsert-by-id semantics: existing ids are
+/// preserved (so keyring API keys are not orphaned), rows missing from the
+/// input are deleted, new rows are inserted. `has_key` is never touched here;
+/// it is owned by the keyring commands.
 #[allow(dead_code)]
 pub async fn replace_web_search_providers(
     pool: &SqlitePool,
@@ -1501,26 +1556,76 @@ pub async fn replace_web_search_providers(
 ) -> Result<()> {
     let now = now_ms();
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM web_search_tool_providers")
-        .execute(&mut *tx)
-        .await?;
+    let mut ids: Vec<String> = Vec::with_capacity(providers.len());
     for (i, p) in providers.iter().enumerate() {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = if p.id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            p.id.clone()
+        };
+        ids.push(id.clone());
         sqlx::query(
             "INSERT INTO web_search_tool_providers \
-             (id, title, url, enabled, position, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
+             (id, title, url, enabled, position, created_at, updated_at, kind, api_method, \
+              auth_scheme, auth_header, body_template, results_path, title_field, url_field, \
+              snippet_field, has_key) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0) \
+             ON CONFLICT(id) DO UPDATE SET \
+             title = ?2, url = ?3, enabled = ?4, position = ?5, kind = ?7, api_method = ?8, \
+             auth_scheme = ?9, auth_header = ?10, body_template = ?11, results_path = ?12, \
+             title_field = ?13, url_field = ?14, snippet_field = ?15, updated_at = ?6",
         )
-        .bind(id)
+        .bind(&id)
         .bind(&p.title)
         .bind(&p.url)
         .bind(if p.enabled { 1 } else { 0 })
         .bind(i as i64)
         .bind(now)
+        .bind(&p.kind)
+        .bind(&p.api_method)
+        .bind(&p.auth_scheme)
+        .bind(&p.auth_header)
+        .bind(&p.body_template)
+        .bind(&p.results_path)
+        .bind(&p.title_field)
+        .bind(&p.url_field)
+        .bind(&p.snippet_field)
         .execute(&mut *tx)
         .await?;
     }
+    if ids.is_empty() {
+        sqlx::query("DELETE FROM web_search_tool_providers")
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        let placeholders: Vec<String> = (0..ids.len()).map(|i| format!("?{}", i + 1)).collect();
+        let sql = format!(
+            "DELETE FROM web_search_tool_providers WHERE id NOT IN ({})",
+            placeholders.join(", ")
+        );
+        let mut q = sqlx::query(&sql);
+        for id in &ids {
+            q = q.bind(id);
+        }
+        q.execute(&mut *tx).await?;
+    }
     tx.commit().await?;
+    Ok(())
+}
+
+/// Update the `has_key` flag after a keyring write/clear.
+#[allow(dead_code)]
+pub async fn set_web_search_provider_has_key(
+    pool: &SqlitePool,
+    id: &str,
+    has_key: bool,
+) -> Result<()> {
+    sqlx::query("UPDATE web_search_tool_providers SET has_key = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(if has_key { 1 } else { 0 })
+        .bind(now_ms())
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
