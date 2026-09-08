@@ -429,8 +429,9 @@ Output exactly this Markdown structure:
 ## Relevant files
 - (file or directory path: why it matters)"#;
 
-const TITLE_PROMPT: &str = "You generate a short, descriptive title for a chat conversation. \
+const TITLE_PROMPT: &str = "You generate a short, descriptive title for a chat conversation from the user's first message and the assistant's first reply. \
 Rules: 2-6 words, plain text, no quotes, no trailing punctuation, no prefix like \"Title:\". \
+Write the title in the same language as the user's first message. \
 Respond with ONLY the title.";
 
 /// Rough token estimate (chars/4). Used only for sizing the tail and recording
