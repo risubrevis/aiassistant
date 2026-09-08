@@ -1284,6 +1284,18 @@ async fn run_turn(
                     });
                 }
             }
+        } else {
+            let drained = changes.drain(&chat_id);
+            if !drained.is_empty() {
+                if let Some(section) =
+                    projects::changed_files_section_chat(&pool, &chat_id, drained).await
+                {
+                    system = Some(match system {
+                        Some(s) => format!("{s}\n\n{section}"),
+                        None => section,
+                    });
+                }
+            }
         }
     }
 

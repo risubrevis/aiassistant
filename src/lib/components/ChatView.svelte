@@ -9,7 +9,7 @@
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
-  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles } from "@lucide/svelte";
+  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
   import AssistantTurn from "./AssistantTurn.svelte";
@@ -30,6 +30,7 @@
   } from "$lib/stores/agents";
   import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT } from "$lib/events";
   import { tasksByChat, tasksModalChatId, openTasksModal, closeTasksModal, taskCounts } from "$lib/stores/tasks";
+  import { rightSidebarOpen, setRightSidebarOpen, saveRightSidebarOpen } from "$lib/stores/layout";
 
   let { chat }: { chat: Chat } = $props();
 
@@ -317,6 +318,13 @@
       <button class="export-btn" title={m.info_title()} onclick={() => (infoOpen = true)}>
         <Info size={15} />
       </button>
+      <button
+        class="export-btn"
+        title={$rightSidebarOpen ? m.context_toggle_collapse() : m.context_toggle_expand()}
+        onclick={() => { const v = !$rightSidebarOpen; setRightSidebarOpen(v); saveRightSidebarOpen(v); }}
+      >
+        {#if $rightSidebarOpen}<PanelRightOpen size={15} />{:else}<PanelRight size={15} />{/if}
+      </button>
     </header>
 
     <div class="messages flex-1 overflow-y-auto px-4 py-2">
@@ -427,8 +435,12 @@
     {/if}
   </div>
 
-  {#if project}
-    <ContextPanel projectId={project.id} projectName={project.name} />
+  {#if $rightSidebarOpen}
+    {#if project}
+      <ContextPanel projectId={project.id} projectName={project.name} chatId={chat.id} />
+    {:else}
+      <ContextPanel chatId={chat.id} />
+    {/if}
   {/if}
 
   <AgentRunModal />

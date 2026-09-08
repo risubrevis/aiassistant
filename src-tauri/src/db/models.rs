@@ -704,6 +704,17 @@ pub async fn list_chat_paths(pool: &SqlitePool, chat_id: &str) -> Result<Vec<Cha
     Ok(rows)
 }
 
+pub async fn get_chat_path(pool: &SqlitePool, id: &str) -> Result<Option<ChatPath>> {
+    let p = sqlx::query_as::<_, ChatPath>(
+        "SELECT id, chat_id, path, kind, watch, exclude_globs, created_at \
+         FROM chat_paths WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(p)
+}
+
 pub async fn add_chat_path(
     pool: &SqlitePool,
     id: &str,
