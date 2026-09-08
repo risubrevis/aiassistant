@@ -193,8 +193,8 @@ pub fn builtin_all_specs() -> Vec<(String, String, String)> {
     use builtin::{
         AddRule, ApplyPatch, AskUser, DeletePath, DeleteRule, EditFile, FileInfo, Glob, Grep,
         ListDir, MakeDir, MovePath, ReadChat, ReadFile, RunCommand, SearchProjectChats,
-        SetFileMode, TodoWrite, ToggleRule, UpdateRule, WebFetch, WebHookList, WebHookRun,
-        WebSearch, WriteFile,
+        SetFileMode, TodoWrite, ToggleRule, UpdateRule, WebFetch, WebHookAdd, WebHookDelete,
+        WebHookList, WebHookModify, WebHookRun, WebSearch, WriteFile,
     };
     r.register(Box::new(ReadFile));
     r.register(Box::new(ListDir));
@@ -221,6 +221,9 @@ pub fn builtin_all_specs() -> Vec<(String, String, String)> {
     r.register(Box::new(ReadChat));
     r.register(Box::new(WebHookList));
     r.register(Box::new(WebHookRun));
+    r.register(Box::new(WebHookAdd));
+    r.register(Box::new(WebHookModify));
+    r.register(Box::new(WebHookDelete));
     r.tools
         .iter()
         .map(|t| {

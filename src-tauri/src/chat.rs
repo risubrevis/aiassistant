@@ -1388,13 +1388,17 @@ async fn run_turn(
         ToolRegistry::builtin_for_mode_ctx(&cfg.defaults.mode, in_project, &cross_chat);
     registry.remove_disabled(&cfg.defaults.disabled_tools);
     mcp.add_to_registry(&mut registry, &cfg.defaults.mode).await;
-    if cfg.defaults.mode != "minimal"
-        && crate::db::web_hooks::has_active(&pool)
+    if cfg.defaults.mode != "minimal" {
+        registry.register(Box::new(crate::tools::builtin::WebHookList));
+        registry.register(Box::new(crate::tools::builtin::WebHookAdd));
+        registry.register(Box::new(crate::tools::builtin::WebHookModify));
+        registry.register(Box::new(crate::tools::builtin::WebHookDelete));
+        if crate::db::web_hooks::has_active(&pool)
             .await
             .unwrap_or(false)
-    {
-        registry.register(Box::new(crate::tools::builtin::WebHookList));
-        registry.register(Box::new(crate::tools::builtin::WebHookRun));
+        {
+            registry.register(Box::new(crate::tools::builtin::WebHookRun));
+        }
     }
     agents::add_to_registry(&mut registry, &agent_contracts, &cfg.defaults.mode);
     if !project_skills.is_empty() {
@@ -1822,7 +1826,26 @@ async fn run_turn(
                                     esc,
                                 )
                             }
-                            None => (summary, None, None, false),
+                            None => {
+                                if let Some(hook_name) = args.get("name").and_then(|v| v.as_str()) {
+                                    let enriched = match tc.name.as_str() {
+                                        "web_hook_add" => {
+                                            format!("create web hook '{hook_name}'")
+                                        }
+                                        "web_hook_modify" => {
+                                            format!("modify web hook '{hook_name}'")
+                                        }
+                                        "web_hook_delete" => {
+                                            format!("delete web hook '{hook_name}'")
+                                        }
+                                        "web_hook_run" => format!("run web hook '{hook_name}'"),
+                                        _ => summary,
+                                    };
+                                    (enriched, None, None, false)
+                                } else {
+                                    (summary, None, None, false)
+                                }
+                            }
                         };
                     let destructive_mode = if tc.name == "delete_path" {
                         Some(
@@ -2464,10 +2487,18 @@ async fn execute(
             Err(e) => crate::tools::ToolResult::err(format!("pty spawn failed: {e}")),
         }
     } else {
-        registry
+        let needs_hook_refresh = matches!(
+            tool_name,
+            "web_hook_add" | "web_hook_modify" | "web_hook_delete"
+        );
+        let result = registry
             .call(tool_name, args)
             .await
-            .unwrap_or_else(|| crate::tools::ToolResult::err("tool failed"))
+            .unwrap_or_else(|| crate::tools::ToolResult::err("tool failed"));
+        if needs_hook_refresh && !result.is_error {
+            let _ = app.emit("web_hooks:changed", ());
+        }
+        result
     }
 }
 

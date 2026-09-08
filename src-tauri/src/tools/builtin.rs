@@ -3942,18 +3942,28 @@ impl Tool for WebHookList {
             description: "List user-configured web hooks (Settings → Web Hooks) available to call via web_hook_run. Returns each hook's name, HTTP method, description and the payload it expects. No network call.".into(),
             parameters: serde_json::json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "include_inactive": { "type": "boolean", "description": "If true, also list inactive hooks. Default: false." }
+                },
                 "additionalProperties": false
             }),
         }
     }
-    async fn execute(&self, _args: Value) -> ToolResult {
+    async fn execute(&self, args: Value) -> ToolResult {
         let Some(pool) = crate::tools::db_pool() else {
             return ToolResult::ok("No web hooks configured.");
         };
-        let hooks = crate::db::web_hooks::list_active(pool)
-            .await
-            .unwrap_or_default();
+        let include_inactive = args
+            .get("include_inactive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let hooks = if include_inactive {
+            crate::db::web_hooks::list(pool).await.unwrap_or_default()
+        } else {
+            crate::db::web_hooks::list_active(pool)
+                .await
+                .unwrap_or_default()
+        };
         if hooks.is_empty() {
             return ToolResult::ok("No web hooks configured.");
         }
@@ -3964,7 +3974,11 @@ impl Tool for WebHookList {
             } else {
                 h.description.trim()
             };
-            out.push_str(&format!("- {} [{}]: {}\n", h.name, h.method, desc));
+            let status = if h.is_active == 0 { " [inactive]" } else { "" };
+            out.push_str(&format!(
+                "- {} [{}]{}: {}\n",
+                h.name, h.method, status, desc
+            ));
         }
         out.push_str("Pass `payload` (string) and optional `variables` (object) to web_hook_run. If the hook has a body_template, it is rendered with {{payload}} and {{variables.KEY}}; otherwise payload is sent as the raw body.");
         super::truncate_text(&mut out, 8000);
@@ -4039,6 +4053,340 @@ impl Tool for WebHookRun {
                 ToolResult::ok(out)
             }
             Err(e) => ToolResult::err(e),
+        }
+    }
+}
+
+/// Create a new web hook (Settings → Web Hooks) callable via `web_hook_run`.
+/// The secret cannot be set through this tool — if auth requires one, tell the
+/// user to set it in Settings → Web Hooks.
+pub struct WebHookAdd;
+
+#[async_trait]
+impl Tool for WebHookAdd {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Network
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "web_hook_add".into(),
+            description: "Create a new web hook that can be invoked via web_hook_run. \
+            The hook is saved to Settings → Web Hooks. The secret (for bearer/basic/api_key auth) \
+            cannot be set through this tool — ask the user to set it manually in Settings → Web Hooks. \
+            Requires user approval."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Unique slug identifying the hook (used in web_hook_run)." },
+                    "title": { "type": "string", "description": "Human-readable title. Defaults to the name." },
+                    "description": { "type": "string", "description": "Description shown to the model — explain what the hook does and what payload it expects." },
+                    "method": { "type": "string", "description": "HTTP method. Default: POST.", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] },
+                    "url": { "type": "string", "description": "HTTP(S) URL. May contain {placeholder} placeholders." },
+                    "headers": { "type": "string", "description": "JSON object of request headers. Values may contain {placeholder} placeholders." },
+                    "body_template": { "type": "string", "description": "Request body template with {placeholder} placeholders. Leave empty to send the raw payload." },
+                    "auth_type": { "type": "string", "description": "Authentication type. Default: none.", "enum": ["none", "bearer", "basic", "api_key_header", "api_key_query"] },
+                    "auth_username": { "type": "string", "description": "Username for Basic auth." },
+                    "auth_header_name": { "type": "string", "description": "Header name for api_key_header auth." },
+                    "auth_param_name": { "type": "string", "description": "Query parameter name for api_key_query auth." },
+                    "timeout_ms": { "type": "integer", "description": "Request timeout in milliseconds. Default: 30000." },
+                    "is_active": { "type": "boolean", "description": "Whether the hook is active (callable). Default: true." }
+                },
+                "required": ["name", "url"],
+                "additionalProperties": false
+            }),
+        }
+    }
+    async fn execute(&self, args: Value) -> ToolResult {
+        let Some(pool) = crate::tools::db_pool() else {
+            return ToolResult::err("web hooks unavailable");
+        };
+        let name = match arg_str(&args, "name") {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => return ToolResult::err("missing or empty 'name'"),
+        };
+        let url = match arg_str(&args, "url") {
+            Some(u) if !u.trim().is_empty() => u.trim().to_string(),
+            _ => return ToolResult::err("missing or empty 'url'"),
+        };
+        match crate::db::web_hooks::get_by_name(pool, &name).await {
+            Ok(Some(_)) => return ToolResult::err(format!("web hook '{name}' already exists")),
+            Ok(None) => {}
+            Err(e) => return ToolResult::err(e.to_string()),
+        }
+        if let Err(e) = ensure_http_url(&url) {
+            return ToolResult::err(e);
+        }
+        let method = arg_str(&args, "method")
+            .unwrap_or("POST")
+            .trim()
+            .to_uppercase();
+        if !matches!(
+            method.as_str(),
+            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD"
+        ) {
+            return ToolResult::err(format!("invalid HTTP method: {method}"));
+        }
+        let headers = arg_str(&args, "headers").unwrap_or("").to_string();
+        if !headers.trim().is_empty() {
+            if serde_json::from_str::<serde_json::Map<String, Value>>(&headers).is_err() {
+                return ToolResult::err("headers must be a valid JSON object");
+            }
+        }
+        let auth_type = arg_str(&args, "auth_type")
+            .unwrap_or("none")
+            .trim()
+            .to_lowercase();
+        if !matches!(
+            auth_type.as_str(),
+            "none" | "bearer" | "basic" | "api_key_header" | "api_key_query"
+        ) {
+            return ToolResult::err(format!("invalid auth_type: {auth_type}"));
+        }
+        let input = crate::db::web_hooks::WebHookInput {
+            title: arg_str(&args, "title").unwrap_or(&name).to_string(),
+            name: name.clone(),
+            description: arg_str(&args, "description").unwrap_or("").to_string(),
+            method,
+            url,
+            headers,
+            body_template: arg_str(&args, "body_template").unwrap_or("").to_string(),
+            auth_type,
+            auth_username: arg_str(&args, "auth_username").unwrap_or("").to_string(),
+            auth_header_name: arg_str(&args, "auth_header_name").unwrap_or("").to_string(),
+            auth_param_name: arg_str(&args, "auth_param_name").unwrap_or("").to_string(),
+            timeout_ms: args
+                .get("timeout_ms")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(30_000),
+            is_active: args
+                .get("is_active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true),
+        };
+        match crate::db::web_hooks::create(pool, input).await {
+            Ok(row) => {
+                let mut msg = format!(
+                    "Created web hook '{}' [{}] {}.\nname: {}\ntitle: {}\ndescription: {}\nurl: {}\nauth: {}",
+                    row.name,
+                    row.method,
+                    if row.is_active != 0 { "(active)" } else { "(inactive)" },
+                    row.name,
+                    row.title,
+                    row.description,
+                    row.url,
+                    row.auth_type
+                );
+                let needs_secret = matches!(
+                    row.auth_type.as_str(),
+                    "bearer" | "basic" | "api_key_header" | "api_key_query"
+                );
+                if needs_secret {
+                    msg.push_str("\n\nNote: this hook uses authentication that requires a secret. The secret cannot be set via this tool — ask the user to set it in Settings → Web Hooks.");
+                }
+                ToolResult::ok(msg)
+            }
+            Err(e) => ToolResult::err(e.to_string()),
+        }
+    }
+}
+
+/// Modify an existing web hook by name. Only provided fields are updated.
+pub struct WebHookModify;
+
+#[async_trait]
+impl Tool for WebHookModify {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Network
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "web_hook_modify".into(),
+            description: "Modify an existing web hook by its current name. Only the fields you provide are updated; omitted fields keep their current values. To rename the hook, set `new_name`. Requires user approval."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Current name (slug) of the hook to modify." },
+                    "new_name": { "type": "string", "description": "New slug name (optional, for renaming)." },
+                    "title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] },
+                    "url": { "type": "string" },
+                    "headers": { "type": "string", "description": "JSON object of request headers." },
+                    "body_template": { "type": "string" },
+                    "auth_type": { "type": "string", "enum": ["none", "bearer", "basic", "api_key_header", "api_key_query"] },
+                    "auth_username": { "type": "string" },
+                    "auth_header_name": { "type": "string" },
+                    "auth_param_name": { "type": "string" },
+                    "timeout_ms": { "type": "integer" },
+                    "is_active": { "type": "boolean" }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        }
+    }
+    async fn execute(&self, args: Value) -> ToolResult {
+        let Some(pool) = crate::tools::db_pool() else {
+            return ToolResult::err("web hooks unavailable");
+        };
+        let name = match arg_str(&args, "name") {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => return ToolResult::err("missing 'name' (current name of the hook to modify)"),
+        };
+        let existing = match crate::db::web_hooks::get_by_name(pool, &name).await {
+            Ok(Some(r)) => r,
+            Ok(None) => return ToolResult::err(format!("web hook '{name}' not found")),
+            Err(e) => return ToolResult::err(e.to_string()),
+        };
+        let new_name = arg_str(&args, "new_name")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(existing.name.clone());
+        if new_name != existing.name {
+            match crate::db::web_hooks::get_by_name(pool, &new_name).await {
+                Ok(Some(other)) if other.id != existing.id => {
+                    return ToolResult::err(format!("web hook '{new_name}' already exists"));
+                }
+                Ok(_) => {}
+                Err(e) => return ToolResult::err(e.to_string()),
+            }
+        }
+        let method = arg_str(&args, "method")
+            .map(|s| s.trim().to_uppercase())
+            .unwrap_or(existing.method.clone());
+        if !matches!(
+            method.as_str(),
+            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD"
+        ) {
+            return ToolResult::err(format!("invalid HTTP method: {method}"));
+        }
+        let url = arg_str(&args, "url")
+            .map(|s| s.trim().to_string())
+            .unwrap_or(existing.url.clone());
+        if let Err(e) = ensure_http_url(&url) {
+            return ToolResult::err(e);
+        }
+        let headers = arg_str(&args, "headers")
+            .unwrap_or(&existing.headers)
+            .to_string();
+        if !headers.trim().is_empty() {
+            if serde_json::from_str::<serde_json::Map<String, Value>>(&headers).is_err() {
+                return ToolResult::err("headers must be a valid JSON object");
+            }
+        }
+        let auth_type = arg_str(&args, "auth_type")
+            .map(|s| s.trim().to_lowercase())
+            .unwrap_or(existing.auth_type.clone());
+        if !matches!(
+            auth_type.as_str(),
+            "none" | "bearer" | "basic" | "api_key_header" | "api_key_query"
+        ) {
+            return ToolResult::err(format!("invalid auth_type: {auth_type}"));
+        }
+        let input = crate::db::web_hooks::WebHookInput {
+            title: arg_str(&args, "title")
+                .unwrap_or(&existing.title)
+                .to_string(),
+            name: new_name,
+            description: arg_str(&args, "description")
+                .unwrap_or(&existing.description)
+                .to_string(),
+            method,
+            url,
+            headers,
+            body_template: arg_str(&args, "body_template")
+                .unwrap_or(&existing.body_template)
+                .to_string(),
+            auth_type,
+            auth_username: arg_str(&args, "auth_username")
+                .unwrap_or(&existing.auth_username)
+                .to_string(),
+            auth_header_name: arg_str(&args, "auth_header_name")
+                .unwrap_or(&existing.auth_header_name)
+                .to_string(),
+            auth_param_name: arg_str(&args, "auth_param_name")
+                .unwrap_or(&existing.auth_param_name)
+                .to_string(),
+            timeout_ms: args
+                .get("timeout_ms")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(existing.timeout_ms),
+            is_active: args
+                .get("is_active")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(existing.is_active != 0),
+        };
+        match crate::db::web_hooks::update(pool, &existing.id, input).await {
+            Ok(row) => {
+                let mut msg = format!(
+                    "Updated web hook '{}' → name='{}' [{}] {}.\nurl: {}\nauth: {}",
+                    name,
+                    row.name,
+                    row.method,
+                    if row.is_active != 0 {
+                        "(active)"
+                    } else {
+                        "(inactive)"
+                    },
+                    row.url,
+                    row.auth_type
+                );
+                let needs_secret = matches!(
+                    row.auth_type.as_str(),
+                    "bearer" | "basic" | "api_key_header" | "api_key_query"
+                );
+                if needs_secret && row.has_secret == 0 {
+                    msg.push_str("\n\nNote: this hook uses authentication that requires a secret, but no secret is set. Ask the user to set it in Settings → Web Hooks.");
+                }
+                ToolResult::ok(msg)
+            }
+            Err(e) => ToolResult::err(e.to_string()),
+        }
+    }
+}
+
+/// Delete a web hook by name. Also clears its secret from the OS keyring.
+pub struct WebHookDelete;
+
+#[async_trait]
+impl Tool for WebHookDelete {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Network
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "web_hook_delete".into(),
+            description: "Delete a web hook by its name (slug). Also removes its secret from the OS keyring. Requires user approval."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Name (slug) of the hook to delete." }
+                },
+                "required": ["name"],
+                "additionalProperties": false
+            }),
+        }
+    }
+    async fn execute(&self, args: Value) -> ToolResult {
+        let Some(pool) = crate::tools::db_pool() else {
+            return ToolResult::err("web hooks unavailable");
+        };
+        let name = match arg_str(&args, "name") {
+            Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+            _ => return ToolResult::err("missing 'name'"),
+        };
+        let row = match crate::db::web_hooks::get_by_name(pool, &name).await {
+            Ok(Some(r)) => r,
+            Ok(None) => return ToolResult::err(format!("web hook '{name}' not found")),
+            Err(e) => return ToolResult::err(e.to_string()),
+        };
+        let _ = crate::secrets::delete_webhook_secret(&row.id);
+        match crate::db::web_hooks::delete(pool, &row.id).await {
+            Ok(_) => ToolResult::ok(format!("Deleted web hook '{name}'.")),
+            Err(e) => ToolResult::err(e.to_string()),
         }
     }
 }
@@ -6523,6 +6871,32 @@ mod tests {
         let r = WebHookRun.execute(json!({ "name": "anything" })).await;
         assert!(r.is_error);
         assert!(r.content.contains("web hooks unavailable"));
+    }
+
+    #[tokio::test]
+    async fn web_hook_add_missing_name() {
+        let r = WebHookAdd
+            .execute(json!({"url": "https://example.com"}))
+            .await;
+        assert!(r.is_error);
+    }
+
+    #[tokio::test]
+    async fn web_hook_add_missing_url() {
+        let r = WebHookAdd.execute(json!({"name": "test"})).await;
+        assert!(r.is_error);
+    }
+
+    #[tokio::test]
+    async fn web_hook_modify_missing_name() {
+        let r = WebHookModify.execute(json!({})).await;
+        assert!(r.is_error);
+    }
+
+    #[tokio::test]
+    async fn web_hook_delete_missing_name() {
+        let r = WebHookDelete.execute(json!({})).await;
+        assert!(r.is_error);
     }
 
     #[test]
