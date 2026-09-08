@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::db::models::{self, Chat, ChatPath, Project, ProjectPath};
+use crate::db::models::{self, Chat, Project, ProjectPath};
 
 /// Per-project file watcher manager. Spawns one notify watcher per watched
 /// path; emits `project:file_changed` events to the UI (ContextPanel, docs/08).
@@ -21,13 +21,6 @@ pub struct ProjectWatcher {
 #[derive(Debug, Clone, Serialize)]
 pub struct FileChangedEvent {
     pub project_id: String,
-    pub path: String,
-    pub kind: String,
-}
-
-#[derive(Clone, Serialize)]
-pub struct ChatFileChangedEvent {
-    pub chat_id: String,
     pub path: String,
     pub kind: String,
 }
@@ -135,116 +128,6 @@ impl ProjectWatcher {
     pub fn stop_project(&self, project_id: &str) {
         if let Ok(mut h) = self.handles.lock() {
             let prefix = format!("{project_id}:");
-            let keys: Vec<String> = h
-                .keys()
-                .filter(|k| k.starts_with(&prefix))
-                .cloned()
-                .collect();
-            for k in keys {
-                h.remove(&k);
-            }
-        }
-    }
-
-    /// (Re)start watchers for all watched paths of a standalone chat.
-    pub fn restart_for_chat(
-        &self,
-        app: AppHandle,
-        pool: SqlitePool,
-        changes: ChangeTracker,
-        chat_id: String,
-    ) {
-        let cid = chat_id.clone();
-        let app2 = app.clone();
-        let self_c = self.clone();
-        tauri::async_runtime::spawn(async move {
-            let paths = match models::list_chat_paths(&pool, &cid).await {
-                Ok(p) => p,
-                Err(e) => {
-                    warn!("list chat paths failed: {e}");
-                    return;
-                }
-            };
-            let watched: Vec<ChatPath> = paths.into_iter().filter(|p| p.watch == 1).collect();
-            // Drop previous watchers for this chat.
-            if let Ok(mut h) = self_c.handles.lock() {
-                let prefix = format!("chat:{cid}:");
-                let keys: Vec<String> = h
-                    .keys()
-                    .filter(|k| k.starts_with(&prefix))
-                    .cloned()
-                    .collect();
-                for k in keys {
-                    h.remove(&k);
-                }
-            }
-            for wp in watched {
-                let key = format!("chat:{cid}:{}", wp.id);
-                let (tx, mut rx) = mpsc::channel::<notify::Result<notify::Event>>(32);
-                let mut watcher = match recommended_watcher(move |res| {
-                    let _ = tx.blocking_send(res);
-                }) {
-                    Ok(w) => w,
-                    Err(e) => {
-                        warn!("watcher init failed for {}: {e}", wp.path);
-                        continue;
-                    }
-                };
-                if let Err(e) =
-                    watcher.watch(PathBuf::from(&wp.path).as_path(), RecursiveMode::Recursive)
-                {
-                    warn!("watch failed for {}: {e}", wp.path);
-                    continue;
-                }
-                if let Ok(mut h) = self_c.handles.lock() {
-                    h.insert(key, watcher);
-                }
-                let app3 = app2.clone();
-                let cid3 = cid.clone();
-                let wp_root = wp.path.clone();
-                let changes3 = changes.clone();
-                tauri::async_runtime::spawn(async move {
-                    while let Some(res) = rx.recv().await {
-                        match res {
-                            Ok(ev) => {
-                                if matches!(ev.kind, EventKind::Access(_)) {
-                                    continue;
-                                }
-                                for p in ev.paths {
-                                    let rel = p
-                                        .strip_prefix(&wp_root)
-                                        .unwrap_or(&p)
-                                        .display()
-                                        .to_string();
-                                    let kind = match ev.kind {
-                                        EventKind::Create(_) => "created",
-                                        EventKind::Modify(_) => "modified",
-                                        EventKind::Remove(_) => "removed",
-                                        _ => "changed",
-                                    };
-                                    changes3.record(&cid3, &p.display().to_string(), kind);
-                                    let _ = app3.emit(
-                                        "chat:file_changed",
-                                        ChatFileChangedEvent {
-                                            chat_id: cid3.clone(),
-                                            path: rel,
-                                            kind: kind.into(),
-                                        },
-                                    );
-                                }
-                            }
-                            Err(e) => warn!("watch event error: {e}"),
-                        }
-                    }
-                });
-            }
-        });
-    }
-
-    /// Stop watchers for a chat (e.g. on delete).
-    pub fn stop_chat(&self, chat_id: &str) {
-        if let Ok(mut h) = self.handles.lock() {
-            let prefix = format!("chat:{chat_id}:");
             let keys: Vec<String> = h
                 .keys()
                 .filter(|k| k.starts_with(&prefix))
@@ -617,111 +500,6 @@ pub async fn changed_file_views(
     changes: Vec<ChangedFile>,
 ) -> Vec<ChangedFileView> {
     let roots = project_roots(pool, project).await;
-    let mut out = Vec::new();
-    for cf in changes {
-        let abs = PathBuf::from(&cf.path);
-        if is_dir(&abs).await {
-            continue;
-        }
-        let rel = project_rel(&roots, &abs);
-        let (content, truncated) = if cf.kind == "removed" || !abs.exists() {
-            (None, false)
-        } else {
-            match tokio::fs::read(&abs).await {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(text) => {
-                        let (content, truncated) = truncate_char_safe(text, PER_FILE_CAP);
-                        (Some(content), truncated)
-                    }
-                    Err(_) => (None, false),
-                },
-                Err(_) => (None, false),
-            }
-        };
-        out.push(ChangedFileView {
-            path: cf.path.clone(),
-            rel,
-            kind: cf.kind.clone(),
-            content,
-            truncated,
-        });
-    }
-    out
-}
-
-/// All chat path roots (potential prefixes for resolving absolute paths).
-async fn chat_roots(pool: &SqlitePool, chat_id: &str) -> Vec<PathBuf> {
-    models::list_chat_paths(pool, chat_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|cp| PathBuf::from(cp.path))
-        .collect()
-}
-
-/// Build a context section listing changed files for a standalone chat with
-/// their current contents (capped), for injection into the system prompt at
-/// turn start. Returns None when there is nothing to inject.
-pub async fn changed_files_section_chat(
-    pool: &SqlitePool,
-    chat_id: &str,
-    changes: Vec<ChangedFile>,
-) -> Option<String> {
-    if changes.is_empty() {
-        return None;
-    }
-    let roots = chat_roots(pool, chat_id).await;
-    let mut section = String::from("Recently changed files (since the last turn):\n");
-    let mut total = 0usize;
-    let mut added = 0usize;
-    let mut more = 0usize;
-    for cf in &changes {
-        let abs = PathBuf::from(&cf.path);
-        if is_dir(&abs).await {
-            continue;
-        }
-        if total >= TOTAL_SECTION_CAP {
-            more += 1;
-            continue;
-        }
-        let rel = project_rel(&roots, &abs);
-        let exists = tokio::fs::metadata(&abs).await.is_ok();
-        let block = if cf.kind == "removed" || !exists {
-            format!("--- {rel} (removed) ---\n(removed)\n")
-        } else {
-            let Ok(bytes) = tokio::fs::read(&abs).await else {
-                continue;
-            };
-            let Ok(text) = String::from_utf8(bytes) else {
-                continue;
-            };
-            let (text, truncated) = truncate_char_safe(text, PER_FILE_CAP);
-            let marker = if truncated {
-                "\n\u{2026}[truncated]"
-            } else {
-                ""
-            };
-            format!("--- {rel} ({}) ---\n{text}{marker}\n", cf.kind)
-        };
-        total += block.len();
-        section.push_str(&block);
-        added += 1;
-    }
-    if more > 0 {
-        section.push_str(&format!("\u{2026} ({more} more files changed)\n"));
-    }
-    (added > 0).then_some(section)
-}
-
-/// Materialize tracked changes into per-file views for the on-request UI
-/// (chat_changed_files). Directories are skipped; removed/binary files get
-/// `content: None`.
-pub async fn changed_file_views_chat(
-    pool: &SqlitePool,
-    chat_id: &str,
-    changes: Vec<ChangedFile>,
-) -> Vec<ChangedFileView> {
-    let roots = chat_roots(pool, chat_id).await;
     let mut out = Vec::new();
     for cf in changes {
         let abs = PathBuf::from(&cf.path);

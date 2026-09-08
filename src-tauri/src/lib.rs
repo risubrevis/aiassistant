@@ -394,8 +394,6 @@ async fn chat_rename(
 
 #[tauri::command]
 async fn chat_delete(chat_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.watcher.stop_chat(&chat_id);
-    state.changes.clear(&chat_id);
     if let Err(e) = db::attachments::delete_chat_attachments(&state.pool, &chat_id).await {
         tracing::warn!("attachment cleanup failed for chat {chat_id}: {e}");
     }
@@ -1560,7 +1558,6 @@ async fn chat_path_add(
     watch: bool,
     exclude_globs: Option<String>,
     state: State<'_, AppState>,
-    app: AppHandle,
 ) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
     db::models::add_chat_path(
@@ -1574,32 +1571,14 @@ async fn chat_path_add(
         now_ms(),
     )
     .await
-    .map_err(|e| e.to_string())?;
-    state
-        .watcher
-        .restart_for_chat(app, state.pool.clone(), state.changes.clone(), chat_id);
-    Ok(())
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn chat_path_delete(
-    id: String,
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    let path_row = db::models::get_chat_path(&state.pool, &id)
+async fn chat_path_delete(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    db::models::delete_chat_path(&state.pool, &id)
         .await
-        .map_err(|e| e.to_string())?;
-    if let Some(path_row) = path_row {
-        let chat_id = path_row.chat_id.clone();
-        db::models::delete_chat_path(&state.pool, &path_row.id)
-            .await
-            .map_err(|e| e.to_string())?;
-        state
-            .watcher
-            .restart_for_chat(app, state.pool.clone(), state.changes.clone(), chat_id);
-    }
-    Ok(())
+        .map_err(|e| e.to_string())
 }
 
 // --- rules ---
@@ -2790,16 +2769,6 @@ async fn project_changed_files(
     Ok(projects::changed_file_views(&state.pool, &project, snap).await)
 }
 
-/// On-request view of tracked standalone-chat file changes (docs/08).
-#[tauri::command]
-async fn chat_changed_files(
-    chat_id: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<projects::ChangedFileView>, String> {
-    let snap = state.changes.snapshot(&chat_id);
-    Ok(projects::changed_file_views_chat(&state.pool, &chat_id, snap).await)
-}
-
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -2900,19 +2869,6 @@ pub fn run() {
                             p.id,
                         );
                     }
-                }
-                // Restart watchers for all existing chats with watched paths.
-                if let Ok(chats) = db::models::list_chats(&pool_c).await {
-                    for c in chats {
-                        watcher_c.restart_for_chat(
-                            app_c.clone(),
-                            pool_c.clone(),
-                            changes_c.clone(),
-                            c.id,
-                        );
-                    }
-                } else {
-                    warn!("list chats failed; chat file watchers not restarted");
                 }
             });
 
@@ -3092,7 +3048,6 @@ pub fn run() {
             set_auto_pull_changes,
             set_delete_to_trash,
             project_changed_files,
-            chat_changed_files,
             set_api_key,
             delete_api_key,
             open_settings_window,
