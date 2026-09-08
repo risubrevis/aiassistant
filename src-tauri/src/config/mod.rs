@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 pub use model::{
-    AgentContract, AppConfig as Config, EventSchema, GlobalRule, ModelRef, Network, Permissions,
-    Provider, Skill, WebSearch,
+    AgentContract, AppConfig as Config, EventSchema, ModelRef, Network, Permissions, Provider,
+    Skill, WebSearch,
 };
 use tracing::warn;
 

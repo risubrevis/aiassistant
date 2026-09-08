@@ -82,7 +82,6 @@
           { label: m.info_attachments(), value: n(info.attachments), mono: true },
           { label: m.info_project_paths(), value: n(info.project_paths), mono: true },
           { label: m.info_chat_paths(), value: n(info.chat_paths), mono: true },
-          { label: m.info_rules(), value: n(info.rules), mono: true },
         ],
       },
       {

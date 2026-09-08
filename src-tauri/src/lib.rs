@@ -32,10 +32,11 @@ use agents::AgentRunner;
 use approval::ApprovalRegistry;
 use ask::AskRegistry;
 use chat::ActiveTurns;
-use config::{spawn_config_watcher, Config, GlobalRule, ModelRef, Skill};
+use config::{spawn_config_watcher, Config, ModelRef, Skill};
 use db::mcp_servers::{McpBody, McpServerInput};
 use db::models::{
-    Chat, ChatInfo, ChatPath, ChatSession, ChatSummary, Message, Project, ProjectPath, Rule,
+    Chat, ChatInfo, ChatPath, ChatSession, ChatSummary, Message, Project, ProjectPath, ProjectRule,
+    Rule,
 };
 use db::providers::{ProviderInput, ProviderModelInput, ProviderRow};
 use db::DbPool;
@@ -1527,26 +1528,10 @@ async fn project_path_delete(
         .await
         .map_err(|e| e.to_string())?;
     if let Some(path_row) = path_row {
-        if path_row.kind == "dir" {
-            // Legacy auto-imported rule snapshots (added_by="auto") are no longer
-            // created — rule files are live-read each turn in rules.rs. Clean up any
-            // leftover legacy rows matching known rule-file headers on dir detach.
-            let auto_rules = db::models::list_rules(&state.pool, "project", &project_id)
-                .await
-                .map_err(|e| e.to_string())?;
-            for name in projects::RULE_FILES {
-                let header = format!("[{}]\n", name);
-                for r in auto_rules.iter().filter(|r| {
-                    r.added_by.as_deref() == Some("auto") && r.text.starts_with(&header)
-                }) {
-                    let _ = db::models::delete_rule(&state.pool, &r.id).await;
-                }
-            }
-        }
+        db::models::delete_project_path(&state.pool, &path_row.id)
+            .await
+            .map_err(|e| e.to_string())?;
     }
-    db::models::delete_project_path(&state.pool, &id)
-        .await
-        .map_err(|e| e.to_string())?;
     state
         .watcher
         .restart_for_project(app, state.pool.clone(), state.changes.clone(), project_id);
@@ -1632,7 +1617,7 @@ async fn environment_detect() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn global_rules_list(state: State<'_, AppState>) -> Result<Vec<GlobalRule>, String> {
+async fn global_rules_list(state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
     db::models::list_global_rules(&state.pool)
         .await
         .map_err(|e| e.to_string())
@@ -1655,19 +1640,6 @@ async fn skills_save(
         .await
         .map_err(|e| e.to_string())?;
     app.emit("skills:reloaded", ()).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-async fn global_rules_save(
-    rules: Vec<GlobalRule>,
-    state: State<'_, AppState>,
-    app: AppHandle,
-) -> Result<(), String> {
-    db::models::replace_global_rules(&state.pool, &rules)
-        .await
-        .map_err(|e| e.to_string())?;
-    app.emit("rules:reloaded", ()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1894,62 +1866,128 @@ async fn web_hooks_test(
 }
 
 #[tauri::command]
-async fn rules_list(
-    scope: String,
-    scope_id: String,
-    state: State<'_, AppState>,
-) -> Result<Vec<Rule>, String> {
-    db::models::list_rules(&state.pool, &scope, &scope_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn rule_add(
-    scope: String,
-    scope_id: String,
+async fn global_rule_create(
     title: String,
     text: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let id = uuid::Uuid::new_v4().to_string();
-    db::models::add_rule(
-        &state.pool,
-        &id,
-        &scope,
-        &scope_id,
-        &title,
-        &text,
-        0,
-        Some("user"),
-        now_ms(),
-    )
-    .await
-    .map_err(|e| e.to_string())
+    db::models::add_global_rule(&state.pool, &id, &title, &text, now_ms())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn rule_update(
+async fn global_rule_update(
     id: String,
     title: String,
     text: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    db::models::update_rule(&state.pool, &id, &title, &text, now_ms())
+    db::models::update_global_rule(&state.pool, &id, &title, &text, now_ms())
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn rule_toggle(id: String, enabled: bool, state: State<'_, AppState>) -> Result<(), String> {
-    db::models::toggle_rule(&state.pool, &id, enabled, now_ms())
+async fn global_rule_delete(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    db::models::delete_global_rule(&state.pool, &id)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn rule_delete(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    db::models::delete_rule(&state.pool, &id)
+async fn global_rule_set_active(
+    id: String,
+    is_active: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_global_rule_active(&state.pool, &id, is_active, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn global_rule_reorder(
+    ordered_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::reorder_global_rules(&state.pool, &ordered_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_rules_list(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ProjectRule>, String> {
+    db::models::list_project_rules(&state.pool, &project_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_rule_create(
+    project_id: String,
+    title: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    db::models::add_project_rule(&state.pool, &id, &project_id, &title, &text, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_rule_update(
+    id: String,
+    title: String,
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::update_project_rule(&state.pool, &id, &title, &text, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_rule_delete(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    db::models::delete_project_rule(&state.pool, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_rule_set_active(
+    id: String,
+    is_active: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_project_rule_active(&state.pool, &id, is_active, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_rule_reorder(
+    project_id: String,
+    ordered_ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::reorder_project_rules(&state.pool, &project_id, &ordered_ids)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_set_include_global_rules(
+    project_id: String,
+    include: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_project_include_global_rules(&state.pool, &project_id, include, now_ms())
         .await
         .map_err(|e| e.to_string())
 }
@@ -2927,17 +2965,23 @@ pub fn run() {
             chat_paths_list,
             chat_path_add,
             chat_path_delete,
-            rules_list,
-            rule_add,
-            rule_update,
-            rule_toggle,
-            rule_delete,
             set_system_prompt,
             environment_get,
             environment_detect,
             environment_save,
             global_rules_list,
-            global_rules_save,
+            global_rule_create,
+            global_rule_update,
+            global_rule_delete,
+            global_rule_set_active,
+            global_rule_reorder,
+            project_rules_list,
+            project_rule_create,
+            project_rule_update,
+            project_rule_delete,
+            project_rule_set_active,
+            project_rule_reorder,
+            project_set_include_global_rules,
             web_search_providers_list,
             web_search_providers_save,
             web_search_provider_set_key,

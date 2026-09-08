@@ -25,6 +25,7 @@
   import SettingsPrompts from "./SettingsPrompts.svelte";
   import SettingsWebSearch from "./SettingsWebSearch.svelte";
   import SettingsWebHooks from "./SettingsWebHooks.svelte";
+  import SettingsRules from "./SettingsRules.svelte";
   import SettingsSkills from "./SettingsSkills.svelte";
   import SettingsNetwork from "./SettingsNetwork.svelte";
   import SettingsLogs from "./SettingsLogs.svelte";
@@ -40,6 +41,7 @@
     { id: "prompts", label: m.settings_tab_prompts() },
     { id: "web_search", label: m.settings_tab_web_search() },
     { id: "web_hooks", label: m.settings_tab_web_hooks() },
+    { id: "rules", label: m.settings_tab_rules() },
     { id: "skills", label: m.settings_tab_skills() },
     { id: "appearance", label: m.settings_tab_appearance() },
     { id: "network", label: m.settings_tab_network() },
@@ -168,6 +170,8 @@
       <SettingsWebSearch />
     {:else if $settingsTab === "web_hooks"}
       <SettingsWebHooks />
+    {:else if $settingsTab === "rules"}
+      <SettingsRules />
     {:else if $settingsTab === "skills"}
       <SettingsSkills />
     {:else}

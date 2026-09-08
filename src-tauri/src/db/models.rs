@@ -3,7 +3,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 
-use crate::config::{GlobalRule, Skill};
+use crate::config::Skill;
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Chat {
@@ -67,6 +67,7 @@ pub struct Project {
     pub settings: Option<String>,
     pub pinned: i64,
     pub sort_order: i64,
+    pub include_global_rules: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -96,13 +97,22 @@ pub struct ChatPath {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct Rule {
     pub id: String,
-    pub scope: String,
-    pub scope_id: String,
     pub title: String,
     pub text: String,
-    pub enabled: i64,
-    pub sort_order: i64,
-    pub added_by: Option<String>,
+    pub is_active: i64,
+    pub position: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct ProjectRule {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    pub text: String,
+    pub is_active: i64,
+    pub position: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -338,12 +348,8 @@ pub async fn touch_chat(pool: &SqlitePool, id: &str, now: i64) -> Result<()> {
 }
 
 pub async fn delete_chat(pool: &SqlitePool, id: &str) -> Result<()> {
-    // tool_calls and rules have no FK cascade; clean them explicitly.
+    // tool_calls has no FK cascade; clean it explicitly.
     sqlx::query("DELETE FROM tool_calls WHERE chat_id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await?;
-    sqlx::query("DELETE FROM rules WHERE scope = 'chat' AND scope_id = ?1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -516,6 +522,7 @@ pub async fn create_project(
         settings: None,
         pinned: 0,
         sort_order: 0,
+        include_global_rules: 1,
         created_at: now,
         updated_at: now,
     })
@@ -524,7 +531,7 @@ pub async fn create_project(
 pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>> {
     let projects = sqlx::query_as::<_, Project>(
         "SELECT id, name, description, system_prompt, default_provider_id, default_model_id, \
-         color, settings, pinned, sort_order, created_at, updated_at FROM projects \
+         color, settings, pinned, sort_order, include_global_rules, created_at, updated_at FROM projects \
          ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
     )
     .fetch_all(pool)
@@ -535,7 +542,8 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>> {
 pub async fn get_project(pool: &SqlitePool, id: &str) -> Result<Option<Project>> {
     let p = sqlx::query_as::<_, Project>(
         "SELECT id, name, description, system_prompt, default_provider_id, default_model_id, \
-         color, settings, pinned, sort_order, created_at, updated_at FROM projects WHERE id = ?1",
+         color, settings, pinned, sort_order, include_global_rules, created_at, updated_at \
+         FROM projects WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -547,7 +555,7 @@ pub async fn update_project(pool: &SqlitePool, p: &Project, now: i64) -> Result<
     sqlx::query(
         "UPDATE projects SET name = ?1, description = ?2, system_prompt = ?3, \
          default_provider_id = ?4, default_model_id = ?5, color = ?6, settings = ?7, \
-         updated_at = ?8 WHERE id = ?9",
+         include_global_rules = ?8, updated_at = ?9 WHERE id = ?10",
     )
     .bind(&p.name)
     .bind(&p.description)
@@ -556,6 +564,7 @@ pub async fn update_project(pool: &SqlitePool, p: &Project, now: i64) -> Result<
     .bind(&p.default_model_id)
     .bind(&p.color)
     .bind(&p.settings)
+    .bind(p.include_global_rules)
     .bind(now)
     .bind(&p.id)
     .execute(pool)
@@ -603,21 +612,13 @@ pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<()> {
             .bind(cid)
             .execute(pool)
             .await?;
-        sqlx::query("DELETE FROM rules WHERE scope = 'chat' AND scope_id = ?1")
-            .bind(cid)
-            .execute(pool)
-            .await?;
     }
     // Chats cascade to messages, chat_paths, agent_runs, sessions, attachments.
     sqlx::query("DELETE FROM chats WHERE project_id = ?1")
         .bind(id)
         .execute(pool)
         .await?;
-    // rules and project_paths have no FK from projects; clean explicitly.
-    sqlx::query("DELETE FROM rules WHERE scope = 'project' AND scope_id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await?;
+    // project_paths have no FK from projects; clean explicitly.
     sqlx::query("DELETE FROM project_paths WHERE project_id = ?1")
         .bind(id)
         .execute(pool)
@@ -737,49 +738,44 @@ pub async fn delete_chat_path(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-// ----- rules -----
+// ----- rules (global) / project_rules -----
 
-pub async fn list_rules(pool: &SqlitePool, scope: &str, scope_id: &str) -> Result<Vec<Rule>> {
+pub async fn list_global_rules(pool: &SqlitePool) -> Result<Vec<Rule>> {
     let rows = sqlx::query_as::<_, Rule>(
-        "SELECT id, title, scope, scope_id, text, enabled, sort_order, added_by, created_at, updated_at \
-         FROM rules WHERE scope = ?1 AND scope_id = ?2 ORDER BY sort_order ASC, created_at ASC",
+        "SELECT id, title, text, is_active, position, created_at, updated_at \
+         FROM rules ORDER BY position ASC, created_at ASC",
     )
-    .bind(scope)
-    .bind(scope_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
 }
 
-pub async fn add_rule(
+pub async fn add_global_rule(
     pool: &SqlitePool,
     id: &str,
-    scope: &str,
-    scope_id: &str,
     title: &str,
     text: &str,
-    sort_order: i64,
-    added_by: Option<&str>,
     now: i64,
 ) -> Result<()> {
+    let position: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(position), 0) + 1 FROM rules")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(1);
     sqlx::query(
-        "INSERT INTO rules (id, scope, scope_id, title, text, enabled, sort_order, added_by, \
-         created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?8, ?8)",
+        "INSERT INTO rules (id, title, text, is_active, position, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?5)",
     )
     .bind(id)
-    .bind(scope)
-    .bind(scope_id)
     .bind(title)
     .bind(text)
-    .bind(sort_order)
-    .bind(added_by)
+    .bind(position)
     .bind(now)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn update_rule(
+pub async fn update_global_rule(
     pool: &SqlitePool,
     id: &str,
     title: &str,
@@ -796,17 +792,7 @@ pub async fn update_rule(
     Ok(())
 }
 
-pub async fn toggle_rule(pool: &SqlitePool, id: &str, enabled: bool, now: i64) -> Result<()> {
-    sqlx::query("UPDATE rules SET enabled = ?1, updated_at = ?2 WHERE id = ?3")
-        .bind(if enabled { 1 } else { 0 })
-        .bind(now)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-pub async fn delete_rule(pool: &SqlitePool, id: &str) -> Result<()> {
+pub async fn delete_global_rule(pool: &SqlitePool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM rules WHERE id = ?1")
         .bind(id)
         .execute(pool)
@@ -814,49 +800,156 @@ pub async fn delete_rule(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
-/// List global rules (scope = "global", scope_id = ""), mapped to config shape.
-#[allow(dead_code)]
-pub async fn list_global_rules(pool: &SqlitePool) -> Result<Vec<GlobalRule>> {
-    let rows = sqlx::query_as::<_, Rule>(
-        "SELECT id, title, scope, scope_id, text, enabled, sort_order, added_by, created_at, updated_at \
-         FROM rules WHERE scope = 'global' AND scope_id = '' ORDER BY sort_order ASC, created_at ASC",
-    )
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| GlobalRule {
-            title: r.title,
-            text: r.text,
-            enabled: r.enabled == 1,
-        })
-        .collect())
+pub async fn set_global_rule_active(
+    pool: &SqlitePool,
+    id: &str,
+    is_active: bool,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE rules SET is_active = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(if is_active { 1 } else { 0 })
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
 
-/// Replace all global rules (delete + insert) with the given list.
-#[allow(dead_code)]
-pub async fn replace_global_rules(pool: &SqlitePool, rules: &[GlobalRule]) -> Result<()> {
+/// Set position = index for each id in the given order.
+pub async fn reorder_global_rules(pool: &SqlitePool, ordered_ids: &[String]) -> Result<()> {
     let now = now_ms();
     let mut tx = pool.begin().await?;
-    sqlx::query("DELETE FROM rules WHERE scope = 'global' AND scope_id = ''")
-        .execute(&mut *tx)
+    for (i, id) in ordered_ids.iter().enumerate() {
+        sqlx::query("UPDATE rules SET position = ?1, updated_at = ?3 WHERE id = ?2")
+            .bind(i as i64)
+            .bind(id)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn list_project_rules(pool: &SqlitePool, project_id: &str) -> Result<Vec<ProjectRule>> {
+    let rows = sqlx::query_as::<_, ProjectRule>(
+        "SELECT id, project_id, title, text, is_active, position, created_at, updated_at \
+         FROM project_rules WHERE project_id = ?1 ORDER BY position ASC, created_at ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn add_project_rule(
+    pool: &SqlitePool,
+    id: &str,
+    project_id: &str,
+    title: &str,
+    text: &str,
+    now: i64,
+) -> Result<()> {
+    let position: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(position), 0) + 1 FROM project_rules WHERE project_id = ?1",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(1);
+    sqlx::query(
+        "INSERT INTO project_rules \
+         (id, project_id, title, text, is_active, position, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?6)",
+    )
+    .bind(id)
+    .bind(project_id)
+    .bind(title)
+    .bind(text)
+    .bind(position)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_project_rule(
+    pool: &SqlitePool,
+    id: &str,
+    title: &str,
+    text: &str,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE project_rules SET title = ?1, text = ?2, updated_at = ?3 WHERE id = ?4")
+        .bind(title)
+        .bind(text)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
         .await?;
-    for (i, r) in rules.iter().enumerate() {
-        let id = uuid::Uuid::new_v4().to_string();
+    Ok(())
+}
+
+pub async fn delete_project_rule(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM project_rules WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_project_rule_active(
+    pool: &SqlitePool,
+    id: &str,
+    is_active: bool,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE project_rules SET is_active = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(if is_active { 1 } else { 0 })
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Set position = index for each id in the given order. Only rows belonging to
+/// `project_id` are touched, so stale ids from another project are ignored.
+pub async fn reorder_project_rules(
+    pool: &SqlitePool,
+    project_id: &str,
+    ordered_ids: &[String],
+) -> Result<()> {
+    let now = now_ms();
+    let mut tx = pool.begin().await?;
+    for (i, id) in ordered_ids.iter().enumerate() {
         sqlx::query(
-            "INSERT INTO rules (id, title, scope, scope_id, text, enabled, sort_order, added_by, created_at, updated_at) \
-             VALUES (?1, ?2, 'global', '', ?3, ?4, ?5, 'user', ?6, ?6)",
+            "UPDATE project_rules SET position = ?1, updated_at = ?4 \
+             WHERE id = ?2 AND project_id = ?3",
         )
-        .bind(&id)
-        .bind(&r.title)
-        .bind(&r.text)
-        .bind(if r.enabled { 1 } else { 0 })
         .bind(i as i64)
+        .bind(id)
+        .bind(project_id)
         .bind(now)
         .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+pub async fn set_project_include_global_rules(
+    pool: &SqlitePool,
+    project_id: &str,
+    include: bool,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE projects SET include_global_rules = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(if include { 1 } else { 0 })
+        .bind(now)
+        .bind(project_id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -1340,12 +1433,8 @@ pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
         .fetch_one(pool)
         .await
         .unwrap_or(0);
-    let rules: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM rules WHERE scope = 'chat' AND scope_id = ?1")
-            .bind(chat_id)
-            .fetch_one(pool)
-            .await
-            .unwrap_or(0);
+    // Chat-scoped rules no longer exist; the field stays for the frontend interface.
+    let rules: i64 = 0;
 
     let (project_name, project_paths) = match chat.project_id.as_ref() {
         Some(pid) => {

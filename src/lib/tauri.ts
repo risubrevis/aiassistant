@@ -189,6 +189,7 @@ export interface Project {
   settings: string | null;
   pinned: number;
   sort_order: number;
+  include_global_rules: number;
   created_at: number;
   updated_at: number;
 }
@@ -223,21 +224,23 @@ export interface ChatPath {
 
 export interface Rule {
   id: string;
-  scope: string;
-  scope_id: string;
   title: string;
   text: string;
-  enabled: number;
-  sort_order: number;
-  added_by: string | null;
+  is_active: number;
+  position: number;
   created_at: number;
   updated_at: number;
 }
 
-export interface GlobalRule {
+export interface ProjectRule {
+  id: string;
+  project_id: string;
   title: string;
   text: string;
-  enabled: boolean;
+  is_active: number;
+  position: number;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface Skill {
@@ -684,20 +687,32 @@ export const promptMove = (id: string, toPosition: number) =>
 export const promptRun = (id: string) => invoke<Chat>("prompt_run", { id });
 
 // --- rules ---
-export const rulesList = (scope: string, scopeId: string) =>
-  invoke<Rule[]>("rules_list", { scope, scopeId });
-export const ruleAdd = (scope: string, scopeId: string, title: string, text: string) =>
-  invoke<void>("rule_add", { scope, scopeId, title, text });
-export const ruleUpdate = (id: string, title: string, text: string) =>
-  invoke<void>("rule_update", { id, title, text });
-export const ruleToggle = (id: string, enabled: boolean) =>
-  invoke<void>("rule_toggle", { id, enabled });
-export const ruleDelete = (id: string) => invoke<void>("rule_delete", { id });
+export const globalRulesList = () => invoke<Rule[]>("global_rules_list");
+export const globalRuleCreate = (title: string, text: string) =>
+  invoke<void>("global_rule_create", { title, text });
+export const globalRuleUpdate = (id: string, title: string, text: string) =>
+  invoke<void>("global_rule_update", { id, title, text });
+export const globalRuleDelete = (id: string) => invoke<void>("global_rule_delete", { id });
+export const globalRuleSetActive = (id: string, isActive: boolean) =>
+  invoke<void>("global_rule_set_active", { id, isActive });
+export const globalRuleReorder = (orderedIds: string[]) =>
+  invoke<void>("global_rule_reorder", { orderedIds });
+
+export const projectRulesList = (projectId: string) =>
+  invoke<ProjectRule[]>("project_rules_list", { projectId });
+export const projectRuleCreate = (projectId: string, title: string, text: string) =>
+  invoke<void>("project_rule_create", { projectId, title, text });
+export const projectRuleUpdate = (id: string, title: string, text: string) =>
+  invoke<void>("project_rule_update", { id, title, text });
+export const projectRuleDelete = (id: string) => invoke<void>("project_rule_delete", { id });
+export const projectRuleSetActive = (id: string, isActive: boolean) =>
+  invoke<void>("project_rule_set_active", { id, isActive });
+export const projectRuleReorder = (projectId: string, orderedIds: string[]) =>
+  invoke<void>("project_rule_reorder", { projectId, orderedIds });
+export const projectSetIncludeGlobalRules = (projectId: string, include: boolean) =>
+  invoke<void>("project_set_include_global_rules", { projectId, include });
 
 export const setSystemPrompt = (text: string) => invoke<void>("set_system_prompt", { text });
-export const globalRulesList = () => invoke<GlobalRule[]>("global_rules_list");
-export const globalRulesSave = (rules: GlobalRule[]) =>
-  invoke<void>("global_rules_save", { rules });
 
 export const environmentGet = () => invoke<string>("environment_get");
 export const environmentSave = (text: string) =>

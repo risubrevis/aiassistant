@@ -1,12 +1,12 @@
 use sqlx::SqlitePool;
 
-use crate::config::{environment_path, Config, GlobalRule};
+use crate::config::{environment_path, Config};
 use crate::db::models::{self, Chat, Project};
 
 /// Assemble the effective system prompt for a chat turn (docs/08):
 ///   [base prompt: project overrides global] + [chat prompt]
 ///   + [Environment info, for plan/write modes]
-///   + [Rules: global / project / chat]
+///   + [Rules: global / project]
 ///   + [cross-chat sibling summaries, if hybrid/summary].
 pub async fn effective_system_prompt(
     pool: &SqlitePool,
@@ -62,39 +62,28 @@ pub async fn effective_system_prompt(
         parts.push(environment_info_block(pool, project).await);
     }
 
-    // Rules block (include ids + disabled state so model-managed tools can reference them).
+    // Rules block: global rules unless the project opts out, plus project rules.
     let mut rules_lines: Vec<String> = Vec::new();
-    if let Ok(global) = models::list_global_rules(pool).await {
-        let enabled: Vec<&GlobalRule> = global.iter().filter(|r| r.enabled).collect();
-        if !enabled.is_empty() {
-            rules_lines.push("Global rules:".into());
-            for r in enabled {
-                rules_lines.push(format!("- {}", r.text));
-            }
-        }
-    }
-    if let Some(p) = project {
-        if let Ok(pr) = models::list_rules(pool, "project", &p.id).await {
-            // Skip auto-imported snapshots — those files are live-read above.
-            let pr: Vec<_> = pr
-                .into_iter()
-                .filter(|r| r.added_by.as_deref() != Some("auto"))
-                .collect();
-            if !pr.is_empty() {
-                rules_lines.push("Project rules:".into());
-                for r in pr {
-                    let marker = if r.enabled == 1 { "" } else { " (disabled)" };
-                    rules_lines.push(format!("- [id={}] {}{}", r.id, r.text, marker));
+    let apply_global = project.map_or(true, |p| p.include_global_rules != 0);
+    if apply_global {
+        if let Ok(global) = models::list_global_rules(pool).await {
+            let active: Vec<_> = global.iter().filter(|r| r.is_active == 1).collect();
+            if !active.is_empty() {
+                rules_lines.push("Global rules:".into());
+                for r in active {
+                    rules_lines.push(format!("- {}", r.text));
                 }
             }
         }
     }
-    if let Ok(cr) = models::list_rules(pool, "chat", &chat.id).await {
-        if !cr.is_empty() {
-            rules_lines.push("Chat rules:".into());
-            for r in cr {
-                let marker = if r.enabled == 1 { "" } else { " (disabled)" };
-                rules_lines.push(format!("- [id={}] {}{}", r.id, r.text, marker));
+    if let Some(p) = project {
+        if let Ok(pr) = models::list_project_rules(pool, &p.id).await {
+            let active: Vec<_> = pr.iter().filter(|r| r.is_active == 1).collect();
+            if !active.is_empty() {
+                rules_lines.push("Project rules:".into());
+                for r in active {
+                    rules_lines.push(format!("- {}", r.text));
+                }
             }
         }
     }

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { toast } from "$lib/stores/toasts";
-  import { X, Plus, Trash2, Pencil } from "@lucide/svelte";
+  import { X, Plus, Trash2 } from "@lucide/svelte";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import * as ipc from "$lib/tauri";
-  import type { Project, ProjectPath, Rule } from "$lib/tauri";
+  import type { Project, ProjectPath } from "$lib/tauri";
   import { projectSettingsOpen, projectSettingsId, deleteProject, projects } from "$lib/stores/project";
   import { config as configStore } from "$lib/stores/config";
   import { m } from "$lib/i18n";
@@ -14,18 +14,11 @@
 
   let project = $state<Project | null>(null);
   let paths = $state<ProjectPath[]>([]);
-  let rules = $state<Rule[]>([]);
   let name = $state("");
   let color = $state("#6366f1");
   let description = $state("");
   let systemPrompt = $state("");
   let crossChat = $state("off");
-  let ruleModalOpen = $state(false);
-  let ruleModalMode = $state<"create" | "edit">("create");
-  let ruleModalId = $state<string | null>(null);
-  let ruleModalTitle = $state("");
-  let ruleModalBody = $state("");
-  let ruleArea = $state<HTMLTextAreaElement | null>(null);
   let ragChunks = $state(0);
   let ragBusy = $state(false);
   let ragEnabled = $state(true);
@@ -52,10 +45,6 @@
           : m.project_cross_chat_hybrid();
   }
 
-  $effect(() => {
-    ruleArea?.focus();
-  });
-
   // Track the RAG master switch from the global config (auto-cleaned on destroy).
   $effect(() => {
     const unsub = configStore.subscribe((cfg) => {
@@ -65,7 +54,6 @@
   });
 
   let open = $derived($projectSettingsOpen);
-  let userRules = $derived(rules.filter((r) => r.added_by !== "auto"));
 
   $effect(() => {
     const id = $projectSettingsId;
@@ -76,9 +64,8 @@
     try {
       project = await ipc.projectGet(id);
       paths = await ipc.projectPathsList(id);
-      rules = await ipc.rulesList("project", id);
     } catch (e) {
-      console.error("projectGet/paths/rules failed", e);
+      console.error("projectGet/paths failed", e);
       return;
     }
     if (project) {
@@ -142,7 +129,6 @@
       }
     }
     paths = await ipc.projectPathsList(project.id);
-    rules = await ipc.rulesList("project", project.id);
   }
 
   async function removePath(p: ProjectPath) {
@@ -152,53 +138,6 @@
       paths = await ipc.projectPathsList(project.id);
     } catch (e) {
       console.error("projectPathDelete failed", e);
-    }
-  }
-
-  function openCreateRule() {
-    ruleModalMode = "create";
-    ruleModalId = null;
-    ruleModalTitle = "";
-    ruleModalBody = "";
-    ruleModalOpen = true;
-  }
-
-  function openEditRule(r: Rule) {
-    ruleModalMode = "edit";
-    ruleModalId = r.id;
-    ruleModalTitle = r.title;
-    ruleModalBody = r.text;
-    ruleModalOpen = true;
-  }
-
-  function closeRuleModal() {
-    ruleModalOpen = false;
-  }
-
-  async function saveRuleModal() {
-    if (!project) return;
-    const title = ruleModalTitle.trim();
-    const body = ruleModalBody.trim();
-    if (!title || !body) return;
-    try {
-      if (ruleModalMode === "create") {
-        await ipc.ruleAdd("project", project.id, title, body);
-      } else if (ruleModalId) {
-        await ipc.ruleUpdate(ruleModalId, title, body);
-      }
-      ruleModalOpen = false;
-      rules = await ipc.rulesList("project", project.id);
-    } catch (e) {
-      console.error("rule save failed", e);
-    }
-  }
-
-  async function deleteRule(r: Rule) {
-    try {
-      await ipc.ruleDelete(r.id);
-      rules = await ipc.rulesList("project", project!.id);
-    } catch (e) {
-      console.error("ruleDelete failed", e);
     }
   }
 
@@ -247,18 +186,7 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (ruleModalOpen) {
-      closeRuleModal();
-      return;
-    }
     if (e.key === "Escape") close();
-  }
-
-  function onRuleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      e.stopPropagation();
-      closeRuleModal();
-    }
   }
 </script>
 
@@ -326,20 +254,6 @@
               </div>
             {/each}
           </div>
-
-          <div class="section">
-            <div class="sec-head">
-              <span>{m.project_rules()}</span>
-              <button class="mini" onclick={openCreateRule}><Plus size={12} /> {m.project_rule_add()}</button>
-            </div>
-            {#each userRules as r (r.id)}
-              <div class="row">
-                <span class="rule-title" title={r.title}>{r.title || r.text}</span>
-                <button class="del" title={m.common_edit()} onclick={() => openEditRule(r)}><Pencil size={12} /></button>
-                <button class="del" title={m.common_delete()} onclick={() => deleteRule(r)}><Trash2 size={12} /></button>
-              </div>
-            {/each}
-          </div>
         </div>
 
         <footer class="foot">
@@ -351,32 +265,6 @@
       {/if}
     </div>
   </div>
-
-  {#if ruleModalOpen}
-    <div class="overlay rule-overlay" onkeydown={onRuleKeydown} role="presentation">
-      <div class="dialog rule-dialog" tabindex="-1" onclick={(e) => e.stopPropagation()} onkeydown={onRuleKeydown} role="dialog">
-        <header class="head">
-          <span class="title">{ruleModalMode === "create" ? m.project_rule_add() : m.common_edit()}</span>
-          <button class="close" title={m.common_close()} onclick={closeRuleModal}><X size={16} /></button>
-        </header>
-        <div class="body">
-          <div class="field">
-            <span class="lbl">{m.project_rule_title()}</span>
-            <input bind:value={ruleModalTitle} placeholder={m.project_rule_title()} />
-          </div>
-          <div class="field">
-            <span class="lbl">{m.project_rule_body()}</span>
-            <textarea bind:value={ruleModalBody} bind:this={ruleArea} rows="6"></textarea>
-          </div>
-        </div>
-        <footer class="foot">
-          <div class="spacer"></div>
-          <button class="ghost" onclick={closeRuleModal}>{m.common_cancel()}</button>
-          <button class="primary" onclick={() => void saveRuleModal()}>{m.common_save()}</button>
-        </footer>
-      </div>
-    </div>
-  {/if}
 
   <ConfirmDialog
     open={confirmDeleteOpen}
@@ -511,19 +399,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .rule-title {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .rule-overlay {
-    z-index: 70;
-  }
-  .rule-dialog {
-    width: 420px;
   }
   .del {
     flex-shrink: 0;

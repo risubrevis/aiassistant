@@ -53,8 +53,6 @@ pub struct AppConfig {
     #[serde(default = "Permissions::defaults")]
     pub permissions: Permissions,
     #[serde(default)]
-    pub rules: Vec<GlobalRule>,
-    #[serde(default)]
     pub skills: Vec<Skill>,
     #[serde(default)]
     pub agents_limits: AgentsLimits,
@@ -70,17 +68,6 @@ pub struct AppConfig {
 
 fn default_config_version() -> u32 {
     1
-}
-
-/// A global rule (applies to all chats). Project/chat rules live in DB (docs/08).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobalRule {
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub text: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
 }
 
 /// A global skill: a reusable prompt snippet the user attaches to a single
@@ -223,7 +210,6 @@ impl Default for AppConfig {
             defaults: Defaults::default(),
             hotkeys: Hotkeys::default(),
             permissions: Permissions::defaults(),
-            rules: Vec::new(),
             skills: Vec::new(),
             agents_limits: AgentsLimits::default(),
             worktree: Worktree::default(),

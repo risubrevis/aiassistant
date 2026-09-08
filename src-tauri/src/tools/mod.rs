@@ -65,8 +65,8 @@ impl Registry {
 
     /// Build the builtin tool set for a mode (docs/12):
     /// minimal -> none, plan -> readonly + interaction, write -> all.
-    /// `in_project` adds cross-chat retrieval tools (search_project_chats, read_chat)
-    /// and the rule-memory tool, available only inside project chats (docs/08).
+    /// `in_project` adds cross-chat retrieval tools (search_project_chats, read_chat),
+    /// available only inside project chats (docs/08).
     /// Cross-chat tools are gated by the project `cross_chat` setting: only "off"
     /// disables them (summary/retrieval/hybrid keep tool access).
     #[allow(dead_code)]
@@ -77,8 +77,8 @@ impl Registry {
     pub fn builtin_for_mode_ctx(mode: &str, in_project: bool, cross_chat: &str) -> Self {
         let mut r = Self::new();
         use builtin::{
-            AddRule, AskUser, DeleteRule, FileInfo, Glob, Grep, ListDir, ReadChat, ReadFile,
-            SearchProjectChats, TodoWrite, ToggleRule, UpdateRule, WebFetch, WebSearch,
+            AskUser, FileInfo, Glob, Grep, ListDir, ReadChat, ReadFile, SearchProjectChats,
+            TodoWrite, WebFetch, WebSearch,
         };
         match mode {
             "minimal" => {}
@@ -92,10 +92,6 @@ impl Registry {
                 r.register(Box::new(WebSearch));
                 r.register(Box::new(AskUser));
                 r.register(Box::new(TodoWrite));
-                r.register(Box::new(AddRule));
-                r.register(Box::new(UpdateRule));
-                r.register(Box::new(ToggleRule));
-                r.register(Box::new(DeleteRule));
                 if in_project && cross_chat != "off" {
                     r.register(Box::new(SearchProjectChats));
                     r.register(Box::new(ReadChat));
@@ -124,10 +120,6 @@ impl Registry {
                 r.register(Box::new(RunCommand));
                 r.register(Box::new(AskUser));
                 r.register(Box::new(TodoWrite));
-                r.register(Box::new(AddRule));
-                r.register(Box::new(UpdateRule));
-                r.register(Box::new(ToggleRule));
-                r.register(Box::new(DeleteRule));
                 if in_project && cross_chat != "off" {
                     r.register(Box::new(SearchProjectChats));
                     r.register(Box::new(ReadChat));
@@ -191,10 +183,10 @@ impl Registry {
 pub fn builtin_all_specs() -> Vec<(String, String, String)> {
     let mut r = Registry::new();
     use builtin::{
-        AddRule, ApplyPatch, AskUser, DeletePath, DeleteRule, EditFile, FileInfo, Glob, Grep,
-        ListDir, MakeDir, MovePath, ReadChat, ReadFile, RunCommand, SearchProjectChats,
-        SetFileMode, TodoWrite, ToggleRule, UpdateRule, WebFetch, WebHookAdd, WebHookDelete,
-        WebHookList, WebHookModify, WebHookRun, WebSearch, WriteFile,
+        ApplyPatch, AskUser, DeletePath, EditFile, FileInfo, Glob, Grep, ListDir, MakeDir,
+        MovePath, ReadChat, ReadFile, RunCommand, SearchProjectChats, SetFileMode, TodoWrite,
+        WebFetch, WebHookAdd, WebHookDelete, WebHookList, WebHookModify, WebHookRun, WebSearch,
+        WriteFile,
     };
     r.register(Box::new(ReadFile));
     r.register(Box::new(ListDir));
@@ -213,10 +205,6 @@ pub fn builtin_all_specs() -> Vec<(String, String, String)> {
     r.register(Box::new(WebSearch));
     r.register(Box::new(AskUser));
     r.register(Box::new(TodoWrite));
-    r.register(Box::new(AddRule));
-    r.register(Box::new(UpdateRule));
-    r.register(Box::new(ToggleRule));
-    r.register(Box::new(DeleteRule));
     r.register(Box::new(SearchProjectChats));
     r.register(Box::new(ReadChat));
     r.register(Box::new(WebHookList));

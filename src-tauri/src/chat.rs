@@ -845,7 +845,6 @@ pub async fn create_project_chat(
 /// Context bundled into a turn for context-aware tools (ask_user, todo, FTS, agents).
 struct TurnCtx {
     pool: SqlitePool,
-    chat: Chat,
     project: Option<crate::db::models::Project>,
     ask: AskRegistry,
     task_nudge: TaskNudge,
@@ -1416,7 +1415,6 @@ async fn run_turn(
 
     let turn_ctx = Arc::new(TurnCtx {
         pool: pool.clone(),
-        chat: chat.clone(),
         project: project.clone(),
         ask: ask.clone(),
         task_nudge: task_nudge.clone(),
@@ -1695,20 +1693,12 @@ async fn run_turn(
             let _ = models::insert_tool_call(&pool, &log_row).await;
 
             let category = registry.category_of(&tc.name);
-            // Context tools (ask_user, todo_write, search_project_chats, read_chat, add_rule,
-            // update_rule, toggle_rule, delete_rule, connect_skill) bypass the file permission
-            // gate — they're interaction/readonly and need no path check.
+            // Context tools (ask_user, todo_write, search_project_chats, read_chat,
+            // connect_skill) bypass the file permission gate — they're
+            // interaction/readonly and need no path check.
             let is_ctx_tool = matches!(
                 tc.name.as_str(),
-                "ask_user"
-                    | "todo_write"
-                    | "search_project_chats"
-                    | "read_chat"
-                    | "add_rule"
-                    | "update_rule"
-                    | "toggle_rule"
-                    | "delete_rule"
-                    | "connect_skill"
+                "ask_user" | "todo_write" | "search_project_chats" | "read_chat" | "connect_skill"
             );
             let is_agent_tool = tc.name == "agent__run_batch" || tc.name.starts_with("agent__");
             let decision = if is_ctx_tool || is_agent_tool {
@@ -2139,7 +2129,7 @@ fn paths_for_tool(name: &str, args: &serde_json::Value) -> Vec<String> {
 }
 
 /// Execute a context-aware tool (ask_user, todo_write, search_project_chats,
-/// read_chat, add_rule). These need DB/chat/project access (docs/08, docs/17).
+/// read_chat). These need DB/chat/project access (docs/08, docs/17).
 async fn execute_ctx_tool(
     app: &AppHandle,
     chat_id: &str,
@@ -2303,79 +2293,6 @@ async fn execute_ctx_tool(
                 }
                 Err(e) => crate::tools::ToolResult::err(format!("read_chat failed: {e}")),
             }
-        }
-        "add_rule" => {
-            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let scope = args.get("scope").and_then(|v| v.as_str()).unwrap_or("chat");
-            if text.is_empty() {
-                return crate::tools::ToolResult::err("missing rule text");
-            }
-            let (scope, scope_id) = match scope {
-                "project" => {
-                    let Some(p) = ctx.project.as_ref() else {
-                        return crate::tools::ToolResult::err("no project for project-scoped rule");
-                    };
-                    ("project", p.id.clone())
-                }
-                _ => ("chat", ctx.chat.id.clone()),
-            };
-            let id = Uuid::new_v4().to_string();
-            if let Err(e) = models::add_rule(
-                &ctx.pool,
-                &id,
-                scope,
-                &scope_id,
-                title,
-                text,
-                0,
-                Some("model"),
-                now_ms(),
-            )
-            .await
-            {
-                return crate::tools::ToolResult::err(format!("add_rule failed: {e}"));
-            }
-            crate::tools::ToolResult::ok(format!("rule added ({} scope): {}", scope, text))
-        }
-        "update_rule" => {
-            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let text = args.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            if id.is_empty() || text.is_empty() {
-                return crate::tools::ToolResult::err("missing rule id or text");
-            }
-            if let Err(e) = models::update_rule(&ctx.pool, id, title, text, now_ms()).await {
-                return crate::tools::ToolResult::err(format!("update_rule failed: {e}"));
-            }
-            crate::tools::ToolResult::ok(format!("rule {id} updated"))
-        }
-        "toggle_rule" => {
-            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            let enabled = args
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-            if id.is_empty() {
-                return crate::tools::ToolResult::err("missing rule id");
-            }
-            if let Err(e) = models::toggle_rule(&ctx.pool, id, enabled, now_ms()).await {
-                return crate::tools::ToolResult::err(format!("toggle_rule failed: {e}"));
-            }
-            crate::tools::ToolResult::ok(format!(
-                "rule {id} {}",
-                if enabled { "enabled" } else { "disabled" }
-            ))
-        }
-        "delete_rule" => {
-            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            if id.is_empty() {
-                return crate::tools::ToolResult::err("missing rule id");
-            }
-            if let Err(e) = models::delete_rule(&ctx.pool, id).await {
-                return crate::tools::ToolResult::err(format!("delete_rule failed: {e}"));
-            }
-            crate::tools::ToolResult::ok(format!("rule {id} deleted"))
         }
         "connect_skill" => {
             let skill_id = args.get("skill_id").and_then(|v| v.as_str()).unwrap_or("");

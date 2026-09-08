@@ -1,7 +1,7 @@
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::SqlitePool;
 
-use crate::config::{EventSchema, GlobalRule, Skill};
+use crate::config::{EventSchema, Skill};
 use crate::db::models;
 use crate::db::providers::{merge_provider_models, ProviderModelInput};
 
@@ -54,12 +54,6 @@ async fn delete_chat_cleans_all_related_rows() {
         .execute(&pool)
         .await
         .unwrap();
-    // rules has no FK either.
-    sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES ('r1','chat','c1','rule',1,0,?1,?1)")
-        .bind(now)
-        .execute(&pool)
-        .await
-        .unwrap();
     sqlx::query("INSERT INTO chat_paths (id, chat_id, path, kind, watch, created_at) VALUES ('cp1','c1','/x','dir',0,?1)")
         .bind(now)
         .execute(&pool)
@@ -95,7 +89,6 @@ async fn delete_chat_cleans_all_related_rows() {
     assert_eq!(count(&pool, "chats").await, 0);
     assert_eq!(count(&pool, "messages").await, 0);
     assert_eq!(count(&pool, "tool_calls").await, 0);
-    assert_eq!(count(&pool, "rules").await, 0);
     assert_eq!(count(&pool, "chat_paths").await, 0);
     assert_eq!(count(&pool, "agent_runs").await, 0);
     assert_eq!(count(&pool, "agent_sessions").await, 0);
@@ -124,7 +117,7 @@ async fn delete_project_cascades_to_chats_and_all_data() {
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES ('pr1','project','proj','prule',1,0,?1,?1)")
+    sqlx::query("INSERT INTO project_rules (id, project_id, title, text, is_active, position, created_at, updated_at) VALUES ('pr1','proj','t','prule',1,0,?1,?1)")
         .bind(now)
         .execute(&pool)
         .await
@@ -149,13 +142,6 @@ async fn delete_project_cascades_to_chats_and_all_data() {
             .bind(format!("{cid}_tc"))
             .bind(cid)
             .bind(&mid)
-            .bind(now)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES (?1,'chat',?2,'cr',1,0,?3,?3)")
-            .bind(format!("{cid}_r"))
-            .bind(cid)
             .bind(now)
             .execute(&pool)
             .await
@@ -221,9 +207,9 @@ async fn delete_project_cascades_to_chats_and_all_data() {
     assert_eq!(count(&pool, "projects").await, 0);
     assert_eq!(count(&pool, "project_paths").await, 0);
     assert_eq!(
-        count(&pool, "rules").await,
+        count(&pool, "project_rules").await,
         0,
-        "both project and chat rules must be gone"
+        "project rules must cascade-delete with the project"
     );
     assert_eq!(
         count(&pool, "chats").await,
@@ -299,57 +285,149 @@ async fn skills_save_list_roundtrip() {
 }
 
 #[tokio::test]
-async fn global_rules_replace_and_list() {
+async fn global_rules_crud_and_reorder() {
     let pool = setup().await;
 
-    models::replace_global_rules(
-        &pool,
-        &[GlobalRule {
-            title: "r".into(),
-            text: "x".into(),
-            enabled: true,
-        }],
-    )
-    .await
-    .unwrap();
+    models::add_global_rule(&pool, "g1", "First", "alpha", 1000)
+        .await
+        .unwrap();
+    models::add_global_rule(&pool, "g2", "Second", "beta", 2000)
+        .await
+        .unwrap();
 
-    let rules = models::list_global_rules(&pool).await.unwrap();
-    assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].title, "r");
-    assert_eq!(rules[0].text, "x");
-    assert!(rules[0].enabled);
-
-    models::replace_global_rules(
-        &pool,
-        &[
-            GlobalRule {
-                title: "a".into(),
-                text: "x".into(),
-                enabled: true,
-            },
-            GlobalRule {
-                title: "b".into(),
-                text: "y".into(),
-                enabled: false,
-            },
-        ],
-    )
-    .await
-    .unwrap();
     let rules = models::list_global_rules(&pool).await.unwrap();
     assert_eq!(rules.len(), 2);
+    assert_eq!(rules[0].id, "g1");
+    assert_eq!(rules[0].title, "First");
+    assert_eq!(rules[0].text, "alpha");
+    assert_eq!(rules[0].position, 1);
+    assert_eq!(rules[0].is_active, 1);
+    assert_eq!(rules[1].id, "g2");
+    assert_eq!(rules[1].text, "beta");
+    assert_eq!(rules[1].position, 2);
 
-    // Project/chat rules must be untouched by global replacement.
+    models::update_global_rule(&pool, "g1", "First edited", "gamma", 3000)
+        .await
+        .unwrap();
+    models::set_global_rule_active(&pool, "g2", false, 3000)
+        .await
+        .unwrap();
+    let rules = models::list_global_rules(&pool).await.unwrap();
+    assert_eq!(rules[0].title, "First edited");
+    assert_eq!(rules[0].text, "gamma");
+    assert_eq!(rules[0].updated_at, 3000);
+    assert_eq!(rules[1].is_active, 0);
+
+    models::reorder_global_rules(&pool, &["g2".into(), "g1".into()])
+        .await
+        .unwrap();
+    let rules = models::list_global_rules(&pool).await.unwrap();
+    assert_eq!(rules[0].id, "g2");
+    assert_eq!(rules[0].position, 0);
+    assert_eq!(rules[1].id, "g1");
+    assert_eq!(rules[1].position, 1);
+
+    models::delete_global_rule(&pool, "g1").await.unwrap();
+    let rules = models::list_global_rules(&pool).await.unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].id, "g2");
+}
+
+#[tokio::test]
+async fn project_rules_crud_and_independence_from_global() {
+    let pool = setup().await;
     let now: i64 = 1700000000;
-    sqlx::query("INSERT INTO rules (id, scope, scope_id, text, enabled, sort_order, created_at, updated_at) VALUES ('pr1','project','proj','prule',1,0,?1,?1)")
+    sqlx::query("INSERT INTO projects (id, name, color, created_at, updated_at) VALUES ('proj','P','x',?1,?1)")
         .bind(now)
         .execute(&pool)
         .await
         .unwrap();
-    models::replace_global_rules(&pool, &[]).await.unwrap();
-    let rules = models::list_global_rules(&pool).await.unwrap();
-    assert!(rules.is_empty());
+
+    models::add_global_rule(&pool, "g1", "G", "global rule", now)
+        .await
+        .unwrap();
+    models::add_project_rule(&pool, "p1", "proj", "P1", "project rule", now)
+        .await
+        .unwrap();
+
+    let project_rules = models::list_project_rules(&pool, "proj").await.unwrap();
+    assert_eq!(project_rules.len(), 1);
+    assert_eq!(project_rules[0].id, "p1");
+    assert_eq!(project_rules[0].project_id, "proj");
+    assert_eq!(project_rules[0].title, "P1");
+    assert_eq!(project_rules[0].text, "project rule");
+    assert_eq!(project_rules[0].position, 1);
+    assert_eq!(project_rules[0].is_active, 1);
+
+    // Global and project rules live in separate tables.
     assert_eq!(count(&pool, "rules").await, 1);
+    assert_eq!(count(&pool, "project_rules").await, 1);
+
+    models::update_project_rule(&pool, "p1", "P1 edited", "edited", now + 1)
+        .await
+        .unwrap();
+    models::set_project_rule_active(&pool, "p1", false, now + 1)
+        .await
+        .unwrap();
+    let project_rules = models::list_project_rules(&pool, "proj").await.unwrap();
+    assert_eq!(project_rules[0].title, "P1 edited");
+    assert_eq!(project_rules[0].text, "edited");
+    assert_eq!(project_rules[0].is_active, 0);
+
+    // Reordering must be scoped to the given project only.
+    sqlx::query("INSERT INTO projects (id, name, color, created_at, updated_at) VALUES ('proj2','P2','x',?1,?1)")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+    models::add_project_rule(&pool, "p2", "proj2", "P2", "other", now)
+        .await
+        .unwrap();
+    models::add_project_rule(&pool, "p3", "proj2", "P3", "other2", now)
+        .await
+        .unwrap();
+    models::reorder_project_rules(&pool, "proj2", &["p3".into(), "p2".into()])
+        .await
+        .unwrap();
+    let proj2 = models::list_project_rules(&pool, "proj2").await.unwrap();
+    assert_eq!(proj2.len(), 2);
+    assert_eq!(proj2[0].id, "p3");
+    assert_eq!(proj2[1].id, "p2");
+    let proj1 = models::list_project_rules(&pool, "proj").await.unwrap();
+    assert_eq!(proj1.len(), 1);
+    assert_eq!(proj1[0].id, "p1");
+
+    models::delete_project_rule(&pool, "p1").await.unwrap();
+    assert_eq!(count(&pool, "project_rules").await, 2);
+}
+
+#[tokio::test]
+async fn project_include_global_rules_flag() {
+    let pool = setup().await;
+
+    let p = models::create_project(&pool, "proj", "P", "x", 1000)
+        .await
+        .unwrap();
+    assert_eq!(p.include_global_rules, 1);
+
+    let listed = models::list_projects(&pool).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].include_global_rules, 1);
+
+    models::set_project_include_global_rules(&pool, "proj", false, 2000)
+        .await
+        .unwrap();
+    let listed = models::list_projects(&pool).await.unwrap();
+    assert_eq!(listed[0].include_global_rules, 0);
+    let got = models::get_project(&pool, "proj").await.unwrap().unwrap();
+    assert_eq!(got.include_global_rules, 0);
+
+    // update_project round-trips the flag.
+    let mut updated = got;
+    updated.include_global_rules = 1;
+    models::update_project(&pool, &updated, 3000).await.unwrap();
+    let got = models::get_project(&pool, "proj").await.unwrap().unwrap();
+    assert_eq!(got.include_global_rules, 1);
 }
 
 #[tokio::test]

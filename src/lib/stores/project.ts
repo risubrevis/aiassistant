@@ -14,6 +14,13 @@ export const pendingAsk = writable<Record<string, ipc.AskUserEvent>>({});
 export const projectSettingsOpen = writable(false);
 export const projectSettingsId = writable<string | null>(null);
 
+export const projectRulesOpen = writable(false);
+export const projectRulesId = writable<string | null>(null);
+export function openProjectRules(id: string) {
+  projectRulesId.set(id);
+  projectRulesOpen.set(true);
+}
+
 export type ProjectSortMode = "updated" | "created" | "alpha" | "manual";
 export const projectSortMode = writable<ProjectSortMode>(
   typeof localStorage !== "undefined"

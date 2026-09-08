@@ -10,12 +10,14 @@
     Star,
     Pencil,
     Settings,
+    ScrollText,
   } from "@lucide/svelte";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import ContextMenu, { type ContextMenuItem } from "./ContextMenu.svelte";
   import RenameModal from "./RenameModal.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import ProjectRulesModal from "./ProjectRulesModal.svelte";
   import Select from "./Select.svelte";
   import {
     chats,
@@ -40,6 +42,7 @@
     createProject,
     openProject,
     openProjectSettings,
+    openProjectRules,
     deleteProject,
     renameProject,
     toggleProjectPinned,
@@ -235,6 +238,11 @@
         onclick: () => {
           renameTarget = { kind: "project", id: p.id, name: p.name };
         },
+      },
+      {
+        label: m.ctx_project_rules(),
+        icon: ScrollText,
+        onclick: () => openProjectRules(p.id),
       },
       {
         label: m.ctx_settings(),
@@ -637,6 +645,8 @@
     onconfirm={() => void onConfirmDelete()}
     oncancel={() => (confirmDelete = null)}
   />
+
+  <ProjectRulesModal />
 </aside>
 
 <style>
