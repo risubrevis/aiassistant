@@ -13,9 +13,11 @@
   } from "$lib/tauri";
 
   let systemPrompt = $state("");
+  let systemPromptSaved = $state("");
   let collapsePct = $state(90);
   let autoPull = $state(true);
   let promptSaved = $state(false);
+  let promptSaving = $state(false);
   let promptError = $state("");
   let addEnvInfo = $state(true);
   let envInfo = $state("");
@@ -39,6 +41,7 @@ Guidelines:
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
   let envSavedTimer: ReturnType<typeof setTimeout> | undefined;
 
+  let promptDirty = $derived(systemPrompt !== systemPromptSaved);
   let envDirty = $derived(envInfo !== envInfoSaved);
 
   onMount(() => {
@@ -52,7 +55,7 @@ Guidelines:
   async function load() {
     try {
       const config = await configGet();
-      systemPrompt = config.defaults.system_prompt || DEFAULT_SYSTEM_PROMPT;
+      systemPrompt = systemPromptSaved = config.defaults.system_prompt || DEFAULT_SYSTEM_PROMPT;
       collapsePct = config.defaults.auto_collapse_context_pct ?? 90;
       autoPull = config.defaults.auto_pull_changes ?? true;
       addEnvInfo = config.defaults.add_environment_info ?? true;
@@ -63,8 +66,10 @@ Guidelines:
   }
 
   async function savePrompt() {
+    promptSaving = true;
     try {
       await setSystemPrompt(systemPrompt);
+      systemPromptSaved = systemPrompt;
       promptError = "";
       promptSaved = true;
       clearTimeout(savedTimer);
@@ -72,7 +77,14 @@ Guidelines:
     } catch (e) {
       promptSaved = false;
       promptError = String(e);
+    } finally {
+      promptSaving = false;
     }
+  }
+
+  function cancelPrompt() {
+    systemPrompt = systemPromptSaved;
+    promptError = "";
   }
 
   async function saveCollapse(value: number) {
@@ -183,18 +195,25 @@ Guidelines:
   </section>
 
   <section class="section">
-    <label class="field">
+    <div class="sec-head">
       <span class="sec-title">{m.settings_prompts_system_prompt()}</span>
-      <textarea
-        class="prompt-area"
-        bind:value={systemPrompt}
-        rows="6"
-        spellcheck="false"
-        onblur={() => void savePrompt()}
-        onkeydown={onPromptKeydown}
-      ></textarea>
-    </label>
+    </div>
     <div class="hint">{m.settings_prompts_system_prompt_hint()}</div>
+    <div class="env-actions">
+      <button class="btn" disabled={!promptDirty || promptSaving} onclick={() => void savePrompt()}>
+        {m.common_save()}
+      </button>
+      <button class="btn" disabled={!promptDirty || promptSaving} onclick={cancelPrompt}>
+        {m.common_cancel()}
+      </button>
+    </div>
+    <textarea
+      class="prompt-area"
+      bind:value={systemPrompt}
+      rows="6"
+      spellcheck="false"
+      onkeydown={onPromptKeydown}
+    ></textarea>
     <div class="status">
       {#if promptSaved}<span class="saved">{m.settings_prompts_saved()}</span>
       {:else if promptError}<span class="err">{promptError}</span>{/if}
@@ -337,12 +356,6 @@ Guidelines:
     opacity: 0.5;
     cursor: default;
     background: var(--background);
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    flex: 1;
   }
   .spacer {
     flex: 1;
