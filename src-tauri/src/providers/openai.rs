@@ -19,6 +19,7 @@ pub struct OpenAiProvider {
     base_url: String,
     client: reqwest::Client,
     timeout: Duration,
+    is_ollama: bool,
 }
 
 impl OpenAiProvider {
@@ -27,6 +28,7 @@ impl OpenAiProvider {
         api_key: Option<String>,
         extra_headers: HashMap<String, String>,
         timeout: Duration,
+        kind: &str,
     ) -> Self {
         let mut headers = HeaderMap::new();
         headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -50,6 +52,7 @@ impl OpenAiProvider {
             base_url: base_url.trim_end_matches('/').to_string(),
             client,
             timeout,
+            is_ollama: kind.eq_ignore_ascii_case("ollama"),
         }
     }
 
@@ -72,6 +75,10 @@ struct ChatCompletionsBody<'a> {
     tools: Option<&'a serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chat_template_kwargs: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -184,6 +191,24 @@ impl Provider for OpenAiProvider {
         }
         messages.extend(req.messages.iter().map(message_to_json));
 
+        // Ollama maps reasoning_effort:"none" to its native think:false;
+        // vLLM/sglang (Qwen3) uses chat_template_kwargs.enable_thinking.
+        // Send both so the active backend picks up whichever it understands.
+        let (chat_template_kwargs, reasoning_effort): (Option<serde_json::Value>, Option<&str>) =
+            match req.thinking {
+                Some(false) => {
+                    if self.is_ollama {
+                        (None, Some("none"))
+                    } else {
+                        (Some(serde_json::json!({"enable_thinking": false})), None)
+                    }
+                }
+                Some(true) => {
+                    // Effort level: low/medium/high. Ollama and OpenAI o-series support this.
+                    (None, req.thinking_effort.as_deref())
+                }
+                None => (None, None),
+            };
         let body = ChatCompletionsBody {
             model: &req.model,
             messages,
@@ -195,6 +220,8 @@ impl Provider for OpenAiProvider {
             },
             tools: req.tools.as_ref(),
             tool_choice: req.tools.as_ref().map(|_| "auto"),
+            chat_template_kwargs,
+            reasoning_effort,
         };
 
         let started = std::time::Instant::now();
@@ -486,6 +513,7 @@ mod tests {
             None,
             HashMap::new(),
             Duration::from_secs(60),
+            "ollama",
         );
         let models = provider.list_models().await.expect("list_models");
         assert!(!models.is_empty(), "ollama returned no models");
@@ -504,6 +532,8 @@ mod tests {
             temperature: None,
             max_tokens: Some(32),
             tools: None,
+            thinking: None,
+            thinking_effort: None,
         };
         let h = tokio::spawn(async move { provider.stream_complete(req, tx).await });
 

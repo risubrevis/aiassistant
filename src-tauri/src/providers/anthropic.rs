@@ -77,6 +77,13 @@ impl AnthropicProvider {
 }
 
 #[derive(Serialize)]
+struct ThinkingConfig {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    budget_tokens: u32,
+}
+
+#[derive(Serialize)]
 struct MessagesBody {
     model: String,
     max_tokens: u32,
@@ -87,6 +94,8 @@ struct MessagesBody {
     tools: Option<Vec<ApiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig>,
     stream: bool,
 }
 
@@ -290,9 +299,34 @@ impl Provider for AnthropicProvider {
         req: CompleteRequest,
         sink: tokio::sync::mpsc::Sender<CompleteEvent>,
     ) -> Result<Usage, ProviderError> {
+        // Extended thinking requires temperature to be unset and max_tokens
+        // comfortably above the thinking budget.
+        let (thinking, temperature, max_tokens) = if req.thinking == Some(true) {
+            let budget_tokens = match req.thinking_effort.as_deref() {
+                Some("low") => 2048,
+                Some("high") => 8192,
+                _ => 4096, // medium or default
+            };
+            (
+                Some(ThinkingConfig {
+                    kind: "enabled",
+                    budget_tokens,
+                }),
+                None,
+                req.max_tokens
+                    .unwrap_or(DEFAULT_MAX_TOKENS)
+                    .max(budget_tokens + 1024),
+            )
+        } else {
+            (
+                None,
+                req.temperature,
+                req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            )
+        };
         let body = MessagesBody {
             model: req.model.clone(),
-            max_tokens: req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+            max_tokens,
             system: req
                 .system
                 .as_deref()
@@ -300,7 +334,8 @@ impl Provider for AnthropicProvider {
                 .map(str::to_string),
             messages: convert_messages(&req.messages),
             tools: convert_tools(req.tools.as_ref()),
-            temperature: req.temperature,
+            temperature,
+            thinking,
             stream: true,
         };
 

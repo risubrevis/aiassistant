@@ -63,6 +63,11 @@ pub struct CompleteRequest {
     pub max_tokens: Option<u32>,
     /// OpenAI `tools` array (`[{type:"function", function:{...}}]`), if any.
     pub tools: Option<Value>,
+    /// Whether to enable (`Some(true)`) or disable (`Some(false)`) model thinking/reasoning.
+    /// `None` = no change (provider default behavior).
+    pub thinking: Option<bool>,
+    /// Thinking effort level: "low", "medium", or "high". Only meaningful when thinking is enabled.
+    pub thinking_effort: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -411,6 +416,7 @@ pub fn build(cfg: &crate::config::Provider) -> Option<Box<dyn Provider>> {
             api_key,
             cfg.extra_headers.clone(),
             std::time::Duration::from_millis(cfg.timeout_ms),
+            &cfg.kind,
         ))),
         "anthropic" => Some(Box::new(AnthropicProvider::new(
             cfg.base_url.clone(),
@@ -423,6 +429,76 @@ pub fn build(cfg: &crate::config::Provider) -> Option<Box<dyn Provider>> {
             None
         }
     }
+}
+
+/// Heuristic: does this provider+model combination support thinking/reasoning blocks?
+pub fn supports_thinking(kind: &str, model: &str) -> bool {
+    let k = kind.trim().to_ascii_lowercase();
+    let m = model.trim().to_ascii_lowercase();
+    if k == "anthropic" {
+        // Extended thinking is supported on Claude 3.5 Sonnet/Haiku, 3.7, and all Claude 4 models.
+        // Exclude the original Claude 3 family (opus/sonnet/haiku without 3.5/3.7).
+        if m.contains("claude-4")
+            || m.contains("claude-opus-4")
+            || m.contains("claude-sonnet-4")
+            || m.contains("claude-haiku-4")
+        {
+            return true;
+        }
+        if m.contains("claude-3-7") || m.contains("claude-3.7") {
+            return true;
+        }
+        // claude-3-5-sonnet and claude-3-5-haiku (but NOT claude-3-sonnet/haiku/opus)
+        if (m.contains("claude-3-5") || m.contains("claude-3.5")) && !m.contains("claude-3-50") {
+            return true;
+        }
+        return false;
+    }
+    // OpenAI-compatible (openai, ollama, custom, etc.): match known reasoning model name patterns.
+    // These produce reasoning_content / reasoning in streaming responses.
+    const PATTERNS: &[&str] = &[
+        "thinking",
+        "reasoning",
+        "reasoner",
+        "qwq",
+        "qwen3",
+        "deepseek-r",
+        "deepseek-reason",
+        "r1",
+        "o1",
+        "o3",
+        "o4",
+        "o5",
+        "gpt-5",
+        "glm-4.5",
+        "glm-4.6",
+        "glm-5",
+        "glm-z1",
+        "gpt-oss",
+        "kimi",
+        "k2",
+        "grok-4",
+        "magistral",
+        "nemotron",
+        "skywork-r",
+        "marco-o",
+    ];
+    PATTERNS.iter().any(|p| m.contains(p))
+}
+
+/// Heuristic: does this provider+model support thinking effort/depth levels?
+pub fn supports_thinking_effort(kind: &str, model: &str) -> bool {
+    let k = kind.trim().to_ascii_lowercase();
+    let m = model.trim().to_ascii_lowercase();
+    if k == "anthropic" {
+        return true; // mapped to budget_tokens
+    }
+    if k == "ollama" {
+        return supports_thinking(kind, model); // Ollama thinking models accept levels
+    }
+    // OpenAI-compatible: o-series and gpt-5 support reasoning_effort
+    const EFFORT_PATTERNS: &[&str] = &["o1", "o3", "o4", "o5", "gpt-5", "gpt-oss"];
+    EFFORT_PATTERNS.iter().any(|p| m.contains(p))
 }
 
 /// Build an HTTP client tuned for streaming LLM completions.

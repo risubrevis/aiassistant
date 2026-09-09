@@ -588,6 +588,8 @@ pub async fn run_compaction(
         temperature: None,
         max_tokens: None,
         tools: None,
+        thinking: None,
+        thinking_effort: None,
     };
 
     // Stream the summary and collect text deltas.
@@ -699,6 +701,8 @@ pub async fn generate_chat_title(
         temperature: Some(0.3),
         max_tokens: Some(48),
         tools: None,
+        thinking: None,
+        thinking_effort: None,
     };
 
     // Stream the title and collect text deltas.
@@ -1212,6 +1216,17 @@ async fn run_turn(
             pcfg.kind
         ));
     }
+    let thinking_supported = providers::supports_thinking(&pcfg.kind, &model);
+    let thinking = if thinking_supported {
+        Some(chat.thinking_enabled != 0)
+    } else {
+        None
+    };
+    let thinking_effort = if thinking_supported {
+        Some(chat.thinking_effort.clone())
+    } else {
+        None
+    };
 
     // Path security roots (project + chat paths).
     let roots = projects::allowed_roots(&pool, chat.project_id.as_deref(), &chat_id).await;
@@ -1464,6 +1479,8 @@ async fn run_turn(
             temperature: None,
             max_tokens: None,
             tools: tools_json.clone(),
+            thinking,
+            thinking_effort: thinking_effort.clone(),
         };
 
         let (tx, mut rx) = mpsc::channel::<CompleteEvent>(64);

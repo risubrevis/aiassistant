@@ -18,6 +18,8 @@ pub struct Chat {
     pub archived: i64,
     pub settings: Option<String>,
     pub meta: Option<String>,
+    pub thinking_enabled: i64,
+    pub thinking_effort: String,
     pub sort_order: i64,
     pub created_at: i64,
     pub updated_at: i64,
@@ -221,6 +223,8 @@ pub async fn create_chat(
         archived: 0,
         settings: None,
         meta: None,
+        thinking_enabled: 1,
+        thinking_effort: "medium".into(),
         sort_order: 0,
         created_at: now,
         updated_at: now,
@@ -253,7 +257,8 @@ pub async fn list_project_chats(pool: &SqlitePool, project_id: &str) -> Result<V
 pub async fn get_chat(pool: &SqlitePool, id: &str) -> Result<Option<Chat>> {
     let chat = sqlx::query_as::<_, Chat>(
         "SELECT id, project_id, title, provider_id, model_id, system_prompt, temperature, \
-         pinned, archived, settings, meta, sort_order, created_at, updated_at FROM chats WHERE id = ?1",
+         pinned, archived, settings, meta, thinking_enabled, thinking_effort, sort_order, \
+         created_at, updated_at FROM chats WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -336,6 +341,35 @@ pub async fn set_chat_meta(pool: &SqlitePool, id: &str, meta: &str, now: i64) ->
         .bind(id)
         .execute(pool)
         .await?;
+    Ok(())
+}
+
+/// Persist the thinking-mode flag and effort level into dedicated columns.
+pub async fn set_chat_thinking(
+    pool: &SqlitePool,
+    id: &str,
+    enabled: bool,
+    effort: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    if let Some(eff) = effort {
+        sqlx::query(
+            "UPDATE chats SET thinking_enabled = ?1, thinking_effort = ?2, updated_at = ?3 WHERE id = ?4",
+        )
+        .bind(enabled as i64)
+        .bind(eff)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    } else {
+        sqlx::query("UPDATE chats SET thinking_enabled = ?1, updated_at = ?2 WHERE id = ?3")
+            .bind(enabled as i64)
+            .bind(now)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
     Ok(())
 }
 
@@ -1339,7 +1373,8 @@ pub struct ChatInfo {
 pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
     let chat = sqlx::query_as::<_, Chat>(
         "SELECT id, project_id, title, provider_id, model_id, system_prompt, temperature, \
-         pinned, archived, settings, meta, sort_order, created_at, updated_at \
+         pinned, archived, settings, meta, thinking_enabled, thinking_effort, sort_order, \
+         created_at, updated_at \
          FROM chats WHERE id = ?1",
     )
     .bind(chat_id)

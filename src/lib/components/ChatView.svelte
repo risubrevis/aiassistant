@@ -1,15 +1,15 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat } from "$lib/stores/chat";
+  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking } from "$lib/stores/chat";
   import type { UiMessage } from "$lib/stores/chat";
   import { config as configStore } from "$lib/stores/config";
   import { projects } from "$lib/stores/project";
-  import { configGet, setMode, setCommandToggle, setEditToggle, chatContextWindow, projectContextSummary, type Chat, type ChatSession, type ProjectContextSummary } from "$lib/tauri";
+  import { configGet, setMode, setCommandToggle, setEditToggle, chatContextWindow, projectContextSummary, chatThinkingInfo, type Chat, type ChatSession, type ProjectContextSummary } from "$lib/tauri";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
-  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen } from "@lucide/svelte";
+  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
   import AssistantTurn from "./AssistantTurn.svelte";
@@ -21,6 +21,7 @@
   import AgentInfoModal from "./AgentInfoModal.svelte";
   import ChatInfoModal from "./ChatInfoModal.svelte";
   import TasksModal from "./TasksModal.svelte";
+  import Select from "./Select.svelte";
   import {
     agents,
     agentRuns,
@@ -159,12 +160,46 @@
     }
   }
 
+  let thinkingInfo = $state<{
+    supports: boolean;
+    enabled: boolean;
+    supports_effort: boolean;
+    effort: string;
+  }>({ supports: false, enabled: false, supports_effort: false, effort: "medium" });
+
+  let thinkingModalOpen = $state(false);
+
+  async function loadThinkingInfo() {
+    try {
+      thinkingInfo = await chatThinkingInfo(chat.id);
+    } catch {
+      thinkingInfo = { supports: false, enabled: false, supports_effort: false, effort: "medium" };
+    }
+  }
+
+  async function setThinkingEnabled(next: boolean) {
+    thinkingInfo = { ...thinkingInfo, enabled: next };
+    await setChatThinking(chat.id, next, thinkingInfo.effort);
+  }
+
+  async function setThinkingEffort(effort: string) {
+    thinkingInfo = { ...thinkingInfo, effort };
+    await setChatThinking(chat.id, thinkingInfo.enabled, effort);
+  }
+
   $effect(() => {
     void chat.id;
     void chat.model_id;
     void chat.provider_id;
     void $configStore;
     void loadContextWindow();
+    void loadThinkingInfo();
+  });
+
+  $effect(() => {
+    if (thinkingModalOpen && !thinkingInfo.supports) {
+      thinkingModalOpen = false;
+    }
   });
 
   let lastPromptUsage = $derived.by(() => {
@@ -399,6 +434,18 @@
         {/if}
       </button>
       <button
+        class="export-btn thinking-btn {thinkingInfo.supports ? (thinkingInfo.enabled ? 'on' : 'off') : 'unsupported'}"
+        title={thinkingInfo.supports ? m.thinking_title() : m.thinking_not_supported()}
+        disabled={!thinkingInfo.supports}
+        onclick={() => thinkingInfo.supports && (thinkingModalOpen = true)}
+      >
+        {#if thinkingInfo.enabled && thinkingInfo.supports}
+          <Lightbulb size={15} />
+        {:else}
+          <LightbulbOff size={15} />
+        {/if}
+      </button>
+      <button
         class="export-btn compact-btn {compactColor}"
         title={compacting ? m.compaction_compacting() : m.compaction_compact_now()}
         disabled={compacting || running || messages.length === 0}
@@ -448,6 +495,67 @@
   <AgentInfoModal chatId={chat.id} />
   <ChatInfoModal open={infoOpen} chatId={chat.id} onclose={() => (infoOpen = false)} />
   <TasksModal open={$tasksModalChatId === chat.id} chatId={chat.id} onclose={closeTasksModal} />
+
+  {#if thinkingModalOpen}
+    <div class="overlay" role="presentation" onkeydown={(e) => e.key === "Escape" && (thinkingModalOpen = false)}>
+      <div
+        class="dialog thinking-dialog"
+        role="dialog"
+        tabindex="-1"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.key === "Escape" && (thinkingModalOpen = false)}
+      >
+        <header class="head">
+          {#if thinkingInfo.enabled}
+            <Lightbulb size={15} class="think-ico-on" />
+          {:else}
+            <LightbulbOff size={15} class="think-ico-off" />
+          {/if}
+          <span class="name">{m.thinking_title()}</span>
+          <button class="x" title={m.common_close()} onclick={() => (thinkingModalOpen = false)}>
+            <X size={15} />
+          </button>
+        </header>
+        <div class="body">
+          <div class="field">
+            <span class="lbl">{m.thinking_status()}</span>
+            <div class="toggle-group">
+              <button
+                class="tg-btn"
+                class:active={thinkingInfo.enabled}
+                onclick={() => void setThinkingEnabled(true)}
+              >
+                {m.thinking_enabled()}
+              </button>
+              <button
+                class="tg-btn"
+                class:active={!thinkingInfo.enabled}
+                onclick={() => void setThinkingEnabled(false)}
+              >
+                {m.thinking_disabled()}
+              </button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="lbl">{m.thinking_effort()}</span>
+            <Select
+              value={thinkingInfo.effort}
+              items={[
+                { value: "low", label: m.thinking_effort_low() },
+                { value: "medium", label: m.thinking_effort_medium() },
+                { value: "high", label: m.thinking_effort_high() },
+              ]}
+              disabled={!thinkingInfo.supports_effort || !thinkingInfo.enabled}
+              onchange={(v: string) => void setThinkingEffort(v)}
+            />
+            {#if !thinkingInfo.supports_effort}
+              <span class="hint">{m.thinking_effort_unavailable()}</span>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   {#if confirmOpen}
     <div
@@ -733,6 +841,129 @@
   .compact-btn.orange { color: hsl(38 90% 50%); }
   .compact-btn.red { color: hsl(0 70% 55%); }
   .compact-btn.grey { color: var(--muted-foreground); }
+  .thinking-btn {
+    border: 1px solid var(--border);
+    background: var(--background);
+    border-radius: var(--radius-md);
+  }
+  .thinking-btn.on {
+    color: hsl(217 91% 60%);
+  }
+  .thinking-btn.off {
+    color: hsl(38 90% 50%);
+  }
+  .thinking-btn.unsupported {
+    color: var(--muted-foreground);
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .thinking-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgb(0 0 0 / 0.5);
+  }
+  .dialog {
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border);
+    background-color: var(--background);
+    overflow: hidden;
+  }
+  .thinking-dialog {
+    width: 360px;
+    max-width: 92vw;
+  }
+  .thinking-dialog .head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.625rem 0.875rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+  .thinking-dialog .head :global(.think-ico-on) {
+    color: hsl(217 91% 60%);
+  }
+  .thinking-dialog .head :global(.think-ico-off) {
+    color: hsl(38 90% 50%);
+  }
+  .thinking-dialog .head .name {
+    flex: 1;
+  }
+  .thinking-dialog .head .x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted-foreground);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 0.15rem;
+    cursor: default;
+  }
+  .thinking-dialog .head .x:hover {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+  .thinking-dialog .body {
+    padding: 0.75rem 0.875rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .thinking-dialog .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .thinking-dialog .lbl {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--muted-foreground);
+  }
+  .thinking-dialog .toggle-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    height: 1.75rem;
+  }
+  .thinking-dialog .tg-btn {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-right: 1px solid var(--border);
+    background: var(--background);
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+    cursor: default;
+  }
+  .thinking-dialog .tg-btn:last-child {
+    border-right: none;
+  }
+  .thinking-dialog .tg-btn:hover {
+    background: var(--accent);
+  }
+  .thinking-dialog .tg-btn.active {
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+  }
+  .thinking-dialog .hint {
+    font-size: 0.68rem;
+    color: var(--muted-foreground);
+  }
   .compact-result {
     margin: 0.5rem auto;
     max-width: 520px;

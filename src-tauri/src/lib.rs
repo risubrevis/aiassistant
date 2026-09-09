@@ -514,6 +514,56 @@ async fn chat_set_model(
 }
 
 #[tauri::command]
+async fn chat_set_thinking(
+    chat_id: String,
+    enabled: bool,
+    effort: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_chat_thinking(&state.pool, &chat_id, enabled, effort.as_deref(), now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct ThinkingInfo {
+    supports: bool,
+    enabled: bool,
+    supports_effort: bool,
+    effort: String,
+}
+
+#[tauri::command]
+async fn chat_thinking_info(
+    chat_id: String,
+    state: State<'_, AppState>,
+) -> Result<ThinkingInfo, String> {
+    let chat = db::models::get_chat(&state.pool, &chat_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "chat not found".to_string())?;
+    let project = projects::project_for_chat(&state.pool, &chat).await;
+    let cfg = state.config.read().unwrap().clone();
+    let resolved = chat::resolve_provider(&state.pool, &chat, project.as_ref(), &cfg).await;
+    let (supports, enabled, supports_effort, effort) = match resolved {
+        Some((pcfg, model_name, _)) => {
+            let sup = providers::supports_thinking(&pcfg.kind, &model_name);
+            let sup_eff = providers::supports_thinking_effort(&pcfg.kind, &model_name);
+            let en = sup && chat.thinking_enabled != 0;
+            let eff = chat.thinking_effort.clone();
+            (sup, en, sup_eff, eff)
+        }
+        None => (false, false, false, "medium".to_string()),
+    };
+    Ok(ThinkingInfo {
+        supports,
+        enabled,
+        supports_effort,
+        effort,
+    })
+}
+
+#[tauri::command]
 async fn chat_set_project(
     chat_id: String,
     project_id: Option<String>,
@@ -2948,6 +2998,8 @@ pub fn run() {
             chat_set_pinned,
             chat_reorder,
             chat_set_model,
+            chat_set_thinking,
+            chat_thinking_info,
             chat_set_project,
             chat_set_system_prompt,
             chat_send,

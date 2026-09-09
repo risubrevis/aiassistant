@@ -285,6 +285,14 @@ export async function setChatModel(
   }
 }
 
+export async function setChatThinking(id: string, enabled: boolean, effort: string) {
+  try {
+    await ipc.chatSetThinking(id, enabled, effort);
+  } catch (e) {
+    console.error("chatSetThinking failed", e);
+  }
+}
+
 export async function sendMessage(text: string, attachmentIds: string[] = [], skillIds: string[] = []) {
   const id = get(currentChatId);
   if (!id || (!text.trim() && attachmentIds.length === 0)) return;

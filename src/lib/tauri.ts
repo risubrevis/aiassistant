@@ -541,6 +541,18 @@ export const chatSetModel = (
   providerId: string | null,
   modelId: string | null,
 ) => invoke<void>("chat_set_model", { chatId, providerId, modelId });
+export interface ThinkingInfo {
+  supports: boolean;
+  enabled: boolean;
+  supports_effort: boolean;
+  effort: string;
+}
+
+export const chatThinkingInfo = (chatId: string) =>
+  invoke<ThinkingInfo>("chat_thinking_info", { chatId });
+
+export const chatSetThinking = (chatId: string, enabled: boolean, effort: string) =>
+  invoke<void>("chat_set_thinking", { chatId, enabled, effort });
 export const chatSend = (
   chatId: string,
   text: string,
