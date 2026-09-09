@@ -1,4 +1,4 @@
-# Maintainer: AIAssistant <noreply@example.com>
+# Maintainer: risubrevis <risubrevis@gmail.com>
 #
 # Build & install:
 #   cd packaging/arch
@@ -9,11 +9,11 @@
 # variant, replace `source` with a git+https://... URL and use `pkgver()`.
 
 pkgname=aiassistant
-pkgver=1.0.0
+pkgver=1.0.22
 pkgrel=1
-pkgdesc="Provider-agnostic desktop app for chatting with LLMs and working on code projects (Tauri 2 + SvelteKit)"
+pkgdesc="Cross-platform provider-agnostic desktop app for chatting with LLMs and working with projects"
 arch=('x86_64' 'aarch64')
-url="https://github.com/aiassistant/AIAssistant"
+url="https://github.com/risubrevis/aiassistant"
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme' 'xdg-desktop-portal')
 makedepends=('rust' 'nodejs' 'npm')

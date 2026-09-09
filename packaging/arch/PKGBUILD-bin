@@ -1,18 +1,18 @@
-# Maintainer: AIAssistant <noreply@example.com>
+# Maintainer: risubrevis <risubrevis@gmail.com>
 #
 # Prebuilt-binary variant (fast install, no Rust/Node toolchain needed):
 #   cd packaging/arch
 #   makepkg -p PKGBUILD-bin -f
-#   sudo pacman -U aiassistant-1.0.7-1-x86_64.pkg.tar.zst
+#   sudo pacman -U aiassistant-<ver>-<rel>-x86_64.pkg.tar.zst
 #
 # For the from-source build, use the regular PKGBUILD instead.
 
 pkgname=aiassistant
-pkgver=1.0.21
+pkgver=1.0.22
 pkgrel=1
-pkgdesc="Provider-agnostic desktop app for chatting with LLMs and working on code projects (Tauri 2 + SvelteKit)"
+pkgdesc="Cross-platform provider-agnostic desktop app for chatting with LLMs and working with projects"
 arch=('x86_64')
-url="https://github.com/aiassistant/AIAssistant"
+url="https://github.com/risubrevis/aiassistant"
 license=('GPL-3.0-or-later')
 depends=('webkit2gtk-4.1' 'gtk3' 'hicolor-icon-theme')
 source=("aiassistant-bin-$pkgver.tar.gz")
