@@ -243,6 +243,16 @@ export interface ProjectRule {
   updated_at: number;
 }
 
+export interface Memory {
+  id: string;
+  chat_id: string;
+  project_id: string | null;
+  content: string;
+  category: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface Skill {
   id: string;
   title: string;
@@ -712,6 +722,16 @@ export const projectRuleReorder = (projectId: string, orderedIds: string[]) =>
 export const projectSetIncludeGlobalRules = (projectId: string, include: boolean) =>
   invoke<void>("project_set_include_global_rules", { projectId, include });
 
+export const memoryListChat = (chatId: string) =>
+  invoke<Memory[]>("memory_list_chat", { chatId });
+export const memoryListProject = (projectId: string) =>
+  invoke<Memory[]>("memory_list_project", { projectId });
+export const memoryDelete = (id: string) => invoke<void>("memory_delete", { id });
+export const memoryClearChat = (chatId: string) =>
+  invoke<void>("memory_clear_chat", { chatId });
+export const memoryClearProject = (projectId: string) =>
+  invoke<void>("memory_clear_project", { projectId });
+
 export const setSystemPrompt = (text: string) => invoke<void>("set_system_prompt", { text });
 
 export const environmentGet = () => invoke<string>("environment_get");
@@ -1095,6 +1115,14 @@ export const toolsSetEnabled = (name: string, enabled: boolean) =>
   invoke<void>("tools_set_enabled", { name, enabled });
 export function onChatPendingUpdate(cb: (e: PendingUpdateEvent) => void): Promise<UnlistenFn> {
   return listen<PendingUpdateEvent>("chat:pending_update", (e) => cb(e.payload));
+}
+
+export interface MemoryUpdateEvent {
+  chat_id: string | null;
+  project_id: string | null;
+}
+export function onChatMemoryUpdate(cb: (e: MemoryUpdateEvent) => void): Promise<UnlistenFn> {
+  return listen<MemoryUpdateEvent>("chat:memory_update", (e) => cb(e.payload));
 }
 
 // --- PTY (interactive commands) ---

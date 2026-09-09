@@ -413,6 +413,50 @@ async fn chat_info(chat_id: String, state: State<'_, AppState>) -> Result<ChatIn
 }
 
 #[tauri::command]
+async fn memory_list_chat(
+    chat_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<db::memory::Memory>, String> {
+    db::memory::list_owned_by_chat(&state.pool, &chat_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn memory_list_project(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<db::memory::Memory>, String> {
+    db::memory::list_for_project(&state.pool, &project_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn memory_delete(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    db::memory::delete(&state.pool, &id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn memory_clear_chat(chat_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    db::memory::clear_chat(&state.pool, &chat_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn memory_clear_project(
+    project_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::memory::clear_project(&state.pool, &project_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn activity_daily(
     state: State<'_, AppState>,
 ) -> Result<Vec<db::models::DayActivity>, String> {
@@ -2894,6 +2938,11 @@ pub fn run() {
             chat_rename,
             chat_delete,
             chat_info,
+            memory_list_chat,
+            memory_list_project,
+            memory_delete,
+            memory_clear_chat,
+            memory_clear_project,
             activity_daily,
             activity_day_detail,
             chat_set_pinned,

@@ -2544,6 +2544,47 @@ impl Tool for ReadChat {
     }
 }
 
+/// Persistent per-chat notes ("memory") the LLM can save/update/delete/list.
+/// Rows live via db::memory; execution is special-cased in chat.rs (emits
+/// chat:memory_update). Shared across a project's chats when in a project.
+pub struct Memory;
+
+#[async_trait]
+impl Tool for Memory {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Interaction
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "memory".into(),
+            description: "Persistent notes (memory) scoped to the current chat; when the chat \
+            belongs to a project, memory is shared across all chats of that project. Actions: \
+            `save` (create a new note), `update` (modify an existing note by id), `delete` \
+            (remove a note by id), `list` (read all current notes).\n\
+            Use it when the user asks you to remember something, and proactively to persist \
+            important context, user preferences, facts or instructions worth keeping across \
+            turns.\n\
+            `content` is the note text — keep it concise and self-contained; `category` is an \
+            optional short tag such as \"preference\", \"fact\", \"instruction\" or \"context\"."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["save", "update", "delete", "list"] },
+                    "id": { "type": "string", "description": "memory note id (for update/delete)" },
+                    "content": { "type": "string", "description": "note text (for save/update)" },
+                    "category": { "type": "string", "description": "optional short tag" }
+                },
+                "required": ["action"]
+            }),
+        }
+    }
+    async fn execute(&self, args: Value) -> ToolResult {
+        let _ = args;
+        ToolResult::err("memory tool requires chat context")
+    }
+}
+
 /// LLM-callable tool that loads a project skill's full body from the project's
 /// `.agents/skills/` folder (or the legacy `.skills/` fallback). The skill list
 /// is bound per turn; execution is intercepted in chat.rs.

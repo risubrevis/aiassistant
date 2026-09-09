@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    Brain,
     Plus,
     Search,
     MessageSquare,
@@ -18,6 +19,7 @@
   import RenameModal from "./RenameModal.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import ProjectRulesModal from "./ProjectRulesModal.svelte";
+  import MemoryModal from "./MemoryModal.svelte";
   import Select from "./Select.svelte";
   import {
     chats,
@@ -58,6 +60,7 @@
   import { sidebarWidth, setSidebarWidth, saveSidebarWidth } from "$lib/stores/layout";
   import { homeView, boardProjectId, promptsView } from "$lib/stores/app";
   import { loadProjectTasks } from "$lib/stores/projectTasks";
+  import { openChatMemory, openProjectMemory } from "$lib/stores/memory";
 
   let query = $state("");
   let ftsResults = $state<FtsHit[]>([]);
@@ -213,6 +216,11 @@
           renameTarget = { kind: "chat", id: c.id, name: c.title };
         },
       },
+      {
+        label: m.ctx_chat_memory(),
+        icon: Brain,
+        onclick: () => openChatMemory(c.id),
+      },
       { label: "", separator: true },
       {
         label: m.ctx_delete(),
@@ -243,6 +251,11 @@
         label: m.ctx_project_rules(),
         icon: ScrollText,
         onclick: () => openProjectRules(p.id),
+      },
+      {
+        label: m.ctx_project_memory(),
+        icon: Brain,
+        onclick: () => openProjectMemory(p.id),
       },
       {
         label: m.ctx_settings(),
@@ -647,6 +660,8 @@
   />
 
   <ProjectRulesModal />
+
+  <MemoryModal />
 </aside>
 
 <style>

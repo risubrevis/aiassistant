@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub mod agents;
 pub mod attachments;
 pub mod mcp_servers;
+pub mod memory;
 pub mod models;
 pub mod project_tasks;
 pub mod prompts;

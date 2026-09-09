@@ -310,6 +310,7 @@ pub async fn set_chat_project(
         .bind(id)
         .execute(pool)
         .await?;
+    crate::db::memory::reassign_chat_project(pool, id, project_id).await?;
     Ok(())
 }
 
@@ -350,6 +351,11 @@ pub async fn touch_chat(pool: &SqlitePool, id: &str, now: i64) -> Result<()> {
 pub async fn delete_chat(pool: &SqlitePool, id: &str) -> Result<()> {
     // tool_calls has no FK cascade; clean it explicitly.
     sqlx::query("DELETE FROM tool_calls WHERE chat_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    // memory also cascades via FK; deleting it here is defensive.
+    sqlx::query("DELETE FROM memory WHERE chat_id = ?1")
         .bind(id)
         .execute(pool)
         .await?;
@@ -613,6 +619,11 @@ pub async fn delete_project(pool: &SqlitePool, id: &str) -> Result<()> {
             .execute(pool)
             .await?;
     }
+    // Clear project-scoped memory; chat-owned memory cascades with the chats.
+    sqlx::query("DELETE FROM memory WHERE project_id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await?;
     // Chats cascade to messages, chat_paths, agent_runs, sessions, attachments.
     sqlx::query("DELETE FROM chats WHERE project_id = ?1")
         .bind(id)

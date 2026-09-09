@@ -77,7 +77,7 @@ impl Registry {
     pub fn builtin_for_mode_ctx(mode: &str, in_project: bool, cross_chat: &str) -> Self {
         let mut r = Self::new();
         use builtin::{
-            AskUser, FileInfo, Glob, Grep, ListDir, ReadChat, ReadFile, SearchProjectChats,
+            AskUser, FileInfo, Glob, Grep, ListDir, Memory, ReadChat, ReadFile, SearchProjectChats,
             TodoWrite, WebFetch, WebSearch,
         };
         match mode {
@@ -92,6 +92,7 @@ impl Registry {
                 r.register(Box::new(WebSearch));
                 r.register(Box::new(AskUser));
                 r.register(Box::new(TodoWrite));
+                r.register(Box::new(Memory));
                 if in_project && cross_chat != "off" {
                     r.register(Box::new(SearchProjectChats));
                     r.register(Box::new(ReadChat));
@@ -120,6 +121,7 @@ impl Registry {
                 r.register(Box::new(RunCommand));
                 r.register(Box::new(AskUser));
                 r.register(Box::new(TodoWrite));
+                r.register(Box::new(Memory));
                 if in_project && cross_chat != "off" {
                     r.register(Box::new(SearchProjectChats));
                     r.register(Box::new(ReadChat));
@@ -183,7 +185,7 @@ impl Registry {
 pub fn builtin_all_specs() -> Vec<(String, String, String)> {
     let mut r = Registry::new();
     use builtin::{
-        ApplyPatch, AskUser, DeletePath, EditFile, FileInfo, Glob, Grep, ListDir, MakeDir,
+        ApplyPatch, AskUser, DeletePath, EditFile, FileInfo, Glob, Grep, ListDir, MakeDir, Memory,
         MovePath, ReadChat, ReadFile, RunCommand, SearchProjectChats, SetFileMode, TodoWrite,
         WebFetch, WebHookAdd, WebHookDelete, WebHookList, WebHookModify, WebHookRun, WebSearch,
         WriteFile,
@@ -205,6 +207,7 @@ pub fn builtin_all_specs() -> Vec<(String, String, String)> {
     r.register(Box::new(WebSearch));
     r.register(Box::new(AskUser));
     r.register(Box::new(TodoWrite));
+    r.register(Box::new(Memory));
     r.register(Box::new(SearchProjectChats));
     r.register(Box::new(ReadChat));
     r.register(Box::new(WebHookList));

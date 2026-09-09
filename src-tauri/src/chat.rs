@@ -1375,6 +1375,26 @@ async fn run_turn(
                 None => section,
             });
         }
+        let chat_memory = crate::db::memory::list_for_chat(&pool, &chat.id)
+            .await
+            .unwrap_or_default();
+        if !chat_memory.is_empty() {
+            let mut lines = vec!["<chat_memory>".to_string()];
+            for mem in &chat_memory {
+                let cat = mem.category.as_deref().unwrap_or("—");
+                lines.push(format!("- [id={}] ({}): {}", mem.id, cat, mem.content));
+            }
+            lines.push("</chat_memory>".to_string());
+            lines.push(
+                "You can use the `memory` tool (save/update/delete) to keep this list current."
+                    .into(),
+            );
+            let section = lines.join("\n");
+            system = Some(match system {
+                Some(s) => format!("{s}\n\n{section}"),
+                None => section,
+            });
+        }
     }
 
     // Tools: builtins filtered by mode + in-project flag (docs/12, docs/08).
@@ -1699,7 +1719,12 @@ async fn run_turn(
             // interaction/readonly and need no path check.
             let is_ctx_tool = matches!(
                 tc.name.as_str(),
-                "ask_user" | "todo_write" | "search_project_chats" | "read_chat" | "connect_skill"
+                "ask_user"
+                    | "todo_write"
+                    | "search_project_chats"
+                    | "read_chat"
+                    | "connect_skill"
+                    | "memory"
             );
             let is_agent_tool = tc.name == "agent__run_batch" || tc.name.starts_with("agent__");
             let decision = if is_ctx_tool || is_agent_tool {
@@ -2310,6 +2335,106 @@ async fn execute_ctx_tool(
                 skill.dir.display(),
                 skill.body
             ))
+        }
+        "memory" => {
+            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");
+            match action {
+                "list" => match crate::db::memory::list_for_chat(&ctx.pool, chat_id).await {
+                    Ok(items) => {
+                        if items.is_empty() {
+                            crate::tools::ToolResult::ok("no memory stored")
+                        } else {
+                            let out = items
+                                .iter()
+                                .map(|m| {
+                                    format!(
+                                        "[{}] ({}) {}",
+                                        m.id,
+                                        m.category.as_deref().unwrap_or("—"),
+                                        m.content
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            crate::tools::ToolResult::ok(out)
+                        }
+                    }
+                    Err(e) => crate::tools::ToolResult::err(format!("failed to list memory: {e}")),
+                },
+                "save" => {
+                    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if content.is_empty() {
+                        return crate::tools::ToolResult::err("missing 'content'");
+                    }
+                    let category = args.get("category").and_then(|v| v.as_str());
+                    let project_id = ctx.project.as_ref().map(|p| p.id.as_str());
+                    match crate::db::memory::save(&ctx.pool, chat_id, project_id, content, category)
+                        .await
+                    {
+                        Ok(mem) => {
+                            let _ = app.emit(
+                                "chat:memory_update",
+                                serde_json::json!({
+                                    "chat_id": chat_id.to_string(),
+                                    "project_id": ctx.project.as_ref().map(|p| p.id.clone())
+                                }),
+                            );
+                            crate::tools::ToolResult::ok(format!("memory saved: {}", mem.id))
+                        }
+                        Err(e) => {
+                            crate::tools::ToolResult::err(format!("failed to save memory: {e}"))
+                        }
+                    }
+                }
+                "update" => {
+                    let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    if id.is_empty() {
+                        return crate::tools::ToolResult::err("missing 'id'");
+                    }
+                    let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    if content.is_empty() {
+                        return crate::tools::ToolResult::err("missing 'content'");
+                    }
+                    let category = args.get("category").and_then(|v| v.as_str());
+                    match crate::db::memory::update(&ctx.pool, id, content, category).await {
+                        Ok(()) => {
+                            let _ = app.emit(
+                                "chat:memory_update",
+                                serde_json::json!({
+                                    "chat_id": chat_id.to_string(),
+                                    "project_id": ctx.project.as_ref().map(|p| p.id.clone())
+                                }),
+                            );
+                            crate::tools::ToolResult::ok("memory updated")
+                        }
+                        Err(e) => {
+                            crate::tools::ToolResult::err(format!("failed to update memory: {e}"))
+                        }
+                    }
+                }
+                "delete" => {
+                    let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    if id.is_empty() {
+                        return crate::tools::ToolResult::err("missing 'id'");
+                    }
+                    match crate::db::memory::delete(&ctx.pool, id).await {
+                        Ok(()) => {
+                            let _ = app.emit(
+                                "chat:memory_update",
+                                serde_json::json!({
+                                    "chat_id": chat_id.to_string(),
+                                    "project_id": ctx.project.as_ref().map(|p| p.id.clone())
+                                }),
+                            );
+                            crate::tools::ToolResult::ok("memory deleted")
+                        }
+                        Err(e) => {
+                            crate::tools::ToolResult::err(format!("failed to delete memory: {e}"))
+                        }
+                    }
+                }
+                _ => crate::tools::ToolResult::err("unknown memory action"),
+            }
         }
         _ => crate::tools::ToolResult::err("unknown context tool"),
     }
