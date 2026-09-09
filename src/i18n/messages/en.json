@@ -743,5 +743,8 @@
   "prompt_move_down": "Move down",
   "prompt_is_template": "Template",
   "prompt_is_template_hint": "Templates create a new chat with the prompt text ready to edit instead of sending immediately.",
-  "prompt_use_template": "Use template"
+  "prompt_use_template": "Use template",
+  "prompts_filter_all": "All prompts",
+  "prompts_filter_standalone": "Standalone chats",
+  "prompts_filter_empty": "No prompts match this filter."
 }

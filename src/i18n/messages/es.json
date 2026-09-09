@@ -743,5 +743,8 @@
   "prompt_move_down": "Bajar",
   "prompt_is_template": "Plantilla",
   "prompt_is_template_hint": "Las plantillas crean un nuevo chat con el texto del prompt listo para editar en lugar de enviarse automáticamente.",
-  "prompt_use_template": "Usar plantilla"
+  "prompt_use_template": "Usar plantilla",
+  "prompts_filter_all": "Todos los prompts",
+  "prompts_filter_standalone": "Chats independientes",
+  "prompts_filter_empty": "Ningún prompt coincide con este filtro."
 }

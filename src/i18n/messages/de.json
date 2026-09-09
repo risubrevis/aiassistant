@@ -743,5 +743,8 @@
   "prompt_move_down": "Nach unten",
   "prompt_is_template": "Vorlage",
   "prompt_is_template_hint": "Vorlagen erstellen einen neuen Chat mit dem Prompt-Text zum Bearbeiten, anstatt ihn sofort zu senden.",
-  "prompt_use_template": "Vorlage verwenden"
+  "prompt_use_template": "Vorlage verwenden",
+  "prompts_filter_all": "Alle Prompts",
+  "prompts_filter_standalone": "Eigenständige Chats",
+  "prompts_filter_empty": "Keine Prompts entsprechen diesem Filter."
 }

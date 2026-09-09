@@ -743,5 +743,8 @@
   "prompt_move_down": "Перемістити вниз",
   "prompt_is_template": "Шаблон",
   "prompt_is_template_hint": "Шаблони створюють новий чат із текстом промпту, готовим до редагування, замість негайного надсилання.",
-  "prompt_use_template": "Використати шаблон"
+  "prompt_use_template": "Використати шаблон",
+  "prompts_filter_all": "Усі промпти",
+  "prompts_filter_standalone": "Окремі чати",
+  "prompts_filter_empty": "Жоден промпт не відповідає цьому фільтру."
 }

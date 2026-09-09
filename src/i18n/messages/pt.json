@@ -743,5 +743,8 @@
   "prompt_move_down": "Mover para baixo",
   "prompt_is_template": "Modelo",
   "prompt_is_template_hint": "Modelos criam um novo chat com o texto do prompt pronto para editar em vez de enviar imediatamente.",
-  "prompt_use_template": "Usar modelo"
+  "prompt_use_template": "Usar modelo",
+  "prompts_filter_all": "Todos os prompts",
+  "prompts_filter_standalone": "Chats independentes",
+  "prompts_filter_empty": "Nenhum prompt corresponde a este filtro."
 }

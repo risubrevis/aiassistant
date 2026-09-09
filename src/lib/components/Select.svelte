@@ -3,6 +3,7 @@
     value: string;
     label: string;
     disabled?: boolean;
+    divider?: boolean;
   };
 </script>
 
@@ -122,16 +123,20 @@
       style:min-width={menuMinWidth}
     >
       {#each items as item (item.value)}
-        <button
-          class="sel-item"
-          class:active={item.value === value}
-          disabled={item.disabled}
-          role="option"
-          aria-selected={item.value === value}
-          onclick={() => pick(item)}
-        >
-          <span class="sel-item-label">{item.label}</span>
-        </button>
+        {#if item.divider}
+          <div class="sel-divider" role="separator"></div>
+        {:else}
+          <button
+            class="sel-item"
+            class:active={item.value === value}
+            disabled={item.disabled}
+            role="option"
+            aria-selected={item.value === value}
+            onclick={() => pick(item)}
+          >
+            <span class="sel-item-label">{item.label}</span>
+          </button>
+        {/if}
       {/each}
     </div>
   {/if}
@@ -246,6 +251,11 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .sel-divider {
+    height: 1px;
+    margin: 0.25rem 0;
+    background: var(--border);
   }
   /* Wide menu grows with the longest item instead of truncating it. */
   .sel-menu.wide .sel-item-label {

@@ -743,5 +743,8 @@
   "prompt_move_down": "Sposta giù",
   "prompt_is_template": "Modello",
   "prompt_is_template_hint": "I modelli creano una nuova chat con il testo del prompt pronto da modificare invece di inviarlo immediatamente.",
-  "prompt_use_template": "Usa modello"
+  "prompt_use_template": "Usa modello",
+  "prompts_filter_all": "Tutti i prompt",
+  "prompts_filter_standalone": "Chat autonome",
+  "prompts_filter_empty": "Nessun prompt corrisponde a questo filtro."
 }

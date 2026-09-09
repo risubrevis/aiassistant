@@ -2,6 +2,7 @@
   import PromptCard from "./PromptCard.svelte";
   import PromptModal from "./PromptModal.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
+  import Select, { type SelectItem } from "./Select.svelte";
   import { m } from "$lib/i18n";
   import { prompts, loadPrompts, movePrompt, deletePrompt, setPromptFavorite, runPrompt } from "$lib/stores/prompts";
   import { projects } from "$lib/stores/project";
@@ -13,11 +14,42 @@
   let modalOpen = $state(false);
   let editingPrompt: Prompt | null = $state(null);
   let deleteTargetId = $state<string | null>(null);
+  let filterValue = $state("all");
 
-  let list = $derived($prompts.slice().sort((a, b) => a.position - b.position));
+  let list = $derived.by(() => {
+    const sorted = $prompts.slice().sort((a, b) => a.position - b.position);
+    if (filterValue === "all") return sorted;
+    if (filterValue === "standalone") return sorted.filter((p) => p.project_id === null);
+    return sorted.filter((p) => p.project_id === filterValue);
+  });
+
+  const filterItems = $derived.by<SelectItem[]>(() => {
+    const items: SelectItem[] = [
+      { value: "all", label: m.prompts_filter_all() },
+      { value: "__d1", label: "", divider: true },
+      { value: "standalone", label: m.prompts_filter_standalone() },
+    ];
+    const sortedProjects = $projects.slice().sort((a, b) => a.name.localeCompare(b.name));
+    if (sortedProjects.length > 0) {
+      items.push({ value: "__d2", label: "", divider: true });
+      for (const p of sortedProjects) {
+        items.push({ value: p.id, label: p.name });
+      }
+    }
+    return items;
+  });
 
   $effect(() => {
     void loadPrompts();
+  });
+
+  // Reset filter to "all" if the selected project was deleted.
+  $effect(() => {
+    if (filterValue !== "all" && filterValue !== "standalone") {
+      if (!$projects.some((p) => p.id === filterValue)) {
+        filterValue = "all";
+      }
+    }
   });
 
   function onAddPrompt() {
@@ -59,6 +91,14 @@
 <div class="wrap">
   <header class="head">
     <span class="title">{m.prompts_view_title()}</span>
+    <div class="filter-wrap">
+      <Select
+        value={filterValue}
+        items={filterItems}
+        onchange={(v) => (filterValue = v)}
+        wide={false}
+      />
+    </div>
     <button class="add" onclick={onAddPrompt}>
       <Plus size={13} />
       <span>{m.prompts_add()}</span>
@@ -67,11 +107,15 @@
   <div class="boardarea">
     {#if list.length === 0}
       <div class="empty">
-        <p>{m.prompts_empty()}</p>
-        <button class="add" onclick={onAddPrompt}>
-          <Plus size={13} />
-          <span>{m.prompts_add()}</span>
-        </button>
+        {#if filterValue === "all"}
+          <p>{m.prompts_empty()}</p>
+          <button class="add" onclick={onAddPrompt}>
+            <Plus size={13} />
+            <span>{m.prompts_add()}</span>
+          </button>
+        {:else}
+          <p>{m.prompts_filter_empty()}</p>
+        {/if}
       </div>
     {:else}
       {#each list as prompt, i (prompt.id)}
@@ -138,8 +182,14 @@
     font-size: 0.72rem;
     cursor: pointer;
   }
-  .head .add {
+  .filter-wrap {
     margin-left: auto;
+    --sel-height: 1.6rem;
+    --sel-font-size: 0.72rem;
+    --sel-max-width: 14rem;
+  }
+  .head .add {
+    margin-left: 0.5rem;
   }
   .add:hover {
     background: var(--accent);

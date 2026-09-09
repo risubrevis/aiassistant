@@ -743,5 +743,8 @@
   "prompt_move_down": "Перасунуць уніз",
   "prompt_is_template": "Шаблон",
   "prompt_is_template_hint": "Шаблоны ствараюць новы чат з тэкстам промпту, гатовым да рэдагавання, замест неадкладнай адпраўкі.",
-  "prompt_use_template": "Выкарыстаць шаблон"
+  "prompt_use_template": "Выкарыстаць шаблон",
+  "prompts_filter_all": "Усе промпты",
+  "prompts_filter_standalone": "Асобныя чаты",
+  "prompts_filter_empty": "Ніводны промпт не адпавядае гэтаму фільтру."
 }
