@@ -93,6 +93,7 @@ export interface Chat {
   pinned: number;
   archived: number;
   meta: string | null;
+  settings: string | null;
   sort_order: number;
   created_at: number;
   updated_at: number;
@@ -259,6 +260,20 @@ export interface Skill {
   body: string;
 }
 
+export interface PromptLaunchSettings {
+  provider_id: string | null;
+  model_id: string | null;
+  mode: string | null;
+  command_toggle: string | null;
+  edit_toggle: string | null;
+  thinking_enabled: boolean | null;
+  thinking_effort: string | null;
+}
+export interface PromptThinkingInfo {
+  supports: boolean;
+  supports_effort: boolean;
+}
+
 export interface Prompt {
   id: string;
   title: string;
@@ -267,6 +282,7 @@ export interface Prompt {
   attach_files: string[];
   skill_ids: string[];
   is_favorite: boolean;
+  launch_settings: PromptLaunchSettings;
   position: number;
   created_at: number;
   updated_at: number;
@@ -553,6 +569,12 @@ export const chatThinkingInfo = (chatId: string) =>
 
 export const chatSetThinking = (chatId: string, enabled: boolean, effort: string) =>
   invoke<void>("chat_set_thinking", { chatId, enabled, effort });
+export const chatSetMode = (chatId: string, mode: string) =>
+  invoke<void>("chat_set_mode", { chatId, mode });
+export const chatSetCommandToggle = (chatId: string, value: string) =>
+  invoke<void>("chat_set_command_toggle", { chatId, value });
+export const chatSetEditToggle = (chatId: string, value: string) =>
+  invoke<void>("chat_set_edit_toggle", { chatId, value });
 export const chatSend = (
   chatId: string,
   text: string,
@@ -690,7 +712,17 @@ export const promptCreate = (
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
-) => invoke<Prompt>("prompt_create", { title, body, projectId, attachFiles, skillIds, isFavorite });
+  launchSettings: PromptLaunchSettings,
+) =>
+  invoke<Prompt>("prompt_create", {
+    title,
+    body,
+    projectId,
+    attachFiles,
+    skillIds,
+    isFavorite,
+    launchSettings,
+  });
 export const promptUpdate = (
   id: string,
   title: string,
@@ -699,14 +731,26 @@ export const promptUpdate = (
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  launchSettings: PromptLaunchSettings,
 ) =>
-  invoke<Prompt>("prompt_update", { id, title, body, projectId, attachFiles, skillIds, isFavorite });
+  invoke<Prompt>("prompt_update", {
+    id,
+    title,
+    body,
+    projectId,
+    attachFiles,
+    skillIds,
+    isFavorite,
+    launchSettings,
+  });
 export const promptDelete = (id: string) => invoke<void>("prompt_delete", { id });
 export const promptSetFavorite = (id: string, isFavorite: boolean) =>
   invoke<void>("prompt_set_favorite", { id, isFavorite });
 export const promptMove = (id: string, toPosition: number) =>
   invoke<void>("prompt_move", { id, toPosition });
 export const promptRun = (id: string) => invoke<Chat>("prompt_run", { id });
+export const promptThinkingInfo = (providerId: string | null, modelId: string | null) =>
+  invoke<PromptThinkingInfo>("prompt_thinking_info", { providerId, modelId });
 
 // --- rules ---
 export const globalRulesList = () => invoke<Rule[]>("global_rules_list");

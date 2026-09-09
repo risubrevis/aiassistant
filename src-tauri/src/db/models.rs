@@ -35,6 +35,7 @@ pub struct ChatSummary {
     pub model_id: Option<String>,
     pub pinned: i64,
     pub archived: i64,
+    pub settings: Option<String>,
     pub meta: Option<String>,
     pub sort_order: i64,
     pub created_at: i64,
@@ -233,7 +234,7 @@ pub async fn create_chat(
 
 pub async fn list_chats(pool: &SqlitePool) -> Result<Vec<ChatSummary>> {
     let chats = sqlx::query_as::<_, ChatSummary>(
-        "SELECT id, project_id, title, provider_id, model_id, pinned, archived, meta, \
+        "SELECT id, project_id, title, provider_id, model_id, pinned, archived, settings, meta, \
          sort_order, created_at, updated_at FROM chats WHERE archived = 0 \
          ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
     )
@@ -244,7 +245,7 @@ pub async fn list_chats(pool: &SqlitePool) -> Result<Vec<ChatSummary>> {
 
 pub async fn list_project_chats(pool: &SqlitePool, project_id: &str) -> Result<Vec<ChatSummary>> {
     let chats = sqlx::query_as::<_, ChatSummary>(
-        "SELECT id, project_id, title, provider_id, model_id, pinned, archived, meta, \
+        "SELECT id, project_id, title, provider_id, model_id, pinned, archived, settings, meta, \
          sort_order, created_at, updated_at FROM chats WHERE project_id = ?1 AND archived = 0 \
          ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
     )
@@ -370,6 +371,40 @@ pub async fn set_chat_thinking(
             .execute(pool)
             .await?;
     }
+    Ok(())
+}
+
+/// Merge a single key into the chat's `settings` JSON column. Creates the JSON
+/// object if the column is NULL; preserves other existing keys.
+pub async fn set_chat_setting(
+    pool: &SqlitePool,
+    id: &str,
+    key: &str,
+    value: &str,
+    now: i64,
+) -> Result<()> {
+    let row: Option<Option<String>> =
+        sqlx::query_scalar("SELECT settings FROM chats WHERE id = ?1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+    let mut json = row
+        .flatten()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let serde_json::Value::Object(ref mut map) = json {
+        map.insert(
+            key.to_string(),
+            serde_json::Value::String(value.to_string()),
+        );
+    }
+    sqlx::query("UPDATE chats SET settings = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(serde_json::to_string(&json)?)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
     Ok(())
 }
 

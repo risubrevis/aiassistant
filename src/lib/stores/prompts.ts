@@ -1,6 +1,6 @@
 import { writable } from "svelte/store";
 import * as ipc from "$lib/tauri";
-import type { Chat, Prompt } from "$lib/tauri";
+import type { Chat, Prompt, PromptLaunchSettings } from "$lib/tauri";
 import { chats, openChat } from "$lib/stores/chat";
 import { loadProjectChats } from "$lib/stores/project";
 
@@ -31,9 +31,18 @@ export async function createPrompt(
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  launchSettings: PromptLaunchSettings,
 ): Promise<Prompt | null> {
   try {
-    const prompt = await ipc.promptCreate(title, body, projectId, attachFiles, skillIds, isFavorite);
+    const prompt = await ipc.promptCreate(
+      title,
+      body,
+      projectId,
+      attachFiles,
+      skillIds,
+      isFavorite,
+      launchSettings,
+    );
     await loadPrompts();
     await loadFavoritePrompts();
     return prompt;
@@ -51,9 +60,10 @@ export async function updatePrompt(
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  launchSettings: PromptLaunchSettings,
 ): Promise<void> {
   try {
-    await ipc.promptUpdate(id, title, body, projectId, attachFiles, skillIds, isFavorite);
+    await ipc.promptUpdate(id, title, body, projectId, attachFiles, skillIds, isFavorite, launchSettings);
     await loadPrompts();
     await loadFavoritePrompts();
   } catch (e) {

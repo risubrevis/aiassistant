@@ -525,6 +525,48 @@ async fn chat_set_thinking(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn chat_set_mode(
+    chat_id: String,
+    mode: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !matches!(mode.as_str(), "minimal" | "plan" | "write") {
+        return Err("invalid mode".into());
+    }
+    db::models::set_chat_setting(&state.pool, &chat_id, "mode", &mode, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn chat_set_command_toggle(
+    chat_id: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !matches!(value.as_str(), "manual" | "auto") {
+        return Err("invalid command_toggle".into());
+    }
+    db::models::set_chat_setting(&state.pool, &chat_id, "command_toggle", &value, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn chat_set_edit_toggle(
+    chat_id: String,
+    value: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !matches!(value.as_str(), "ask" | "auto") {
+        return Err("invalid edit_toggle".into());
+    }
+    db::models::set_chat_setting(&state.pool, &chat_id, "edit_toggle", &value, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 struct ThinkingInfo {
     supports: bool,
@@ -1317,6 +1359,7 @@ async fn prompt_list_favorites(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn prompt_create(
     title: String,
     body: String,
@@ -1324,6 +1367,7 @@ async fn prompt_create(
     attach_files: Vec<String>,
     skill_ids: Vec<String>,
     is_favorite: bool,
+    launch_settings: db::prompts::PromptLaunchSettings,
     state: State<'_, AppState>,
 ) -> Result<db::prompts::Prompt, String> {
     db::prompts::create(
@@ -1334,6 +1378,7 @@ async fn prompt_create(
         &attach_files,
         &skill_ids,
         is_favorite,
+        &launch_settings,
     )
     .await
     .map_err(|e| e.to_string())
@@ -1349,6 +1394,7 @@ async fn prompt_update(
     attach_files: Vec<String>,
     skill_ids: Vec<String>,
     is_favorite: bool,
+    launch_settings: db::prompts::PromptLaunchSettings,
     state: State<'_, AppState>,
 ) -> Result<db::prompts::Prompt, String> {
     db::prompts::update(
@@ -1360,6 +1406,7 @@ async fn prompt_update(
         &attach_files,
         &skill_ids,
         is_favorite,
+        &launch_settings,
     )
     .await
     .map_err(|e| e.to_string())
@@ -1415,6 +1462,57 @@ async fn prompt_run(
         return Err(format!("missing attached files: {}", missing.join(", ")));
     }
     let cfg = state.config.read().unwrap().clone();
+    let ls = &prompt.launch_settings;
+    let provider_id = ls
+        .provider_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.defaults.main_model.as_ref().map(|m| m.provider.clone()));
+    let model_id = ls
+        .model_id
+        .clone()
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.defaults.main_model.as_ref().map(|m| m.model.clone()));
+    let mode = ls.mode.clone().unwrap_or_else(|| cfg.defaults.mode.clone());
+    let command_toggle = ls
+        .command_toggle
+        .clone()
+        .unwrap_or_else(|| cfg.defaults.command_toggle.clone());
+    let edit_toggle = ls
+        .edit_toggle
+        .clone()
+        .unwrap_or_else(|| cfg.defaults.edit_toggle.clone());
+    let thinking_enabled = ls.thinking_enabled.unwrap_or(true);
+    let thinking_effort = ls
+        .thinking_effort
+        .clone()
+        .unwrap_or_else(|| "medium".to_string());
+    let (Some(provider_id), Some(model_id)) = (provider_id, model_id) else {
+        return Err(
+            "No model configured. Set a default model in Settings → Models or pick a model for this prompt."
+                .into(),
+        );
+    };
+    let provider_ok = db::providers::get_provider(&state.pool, &provider_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_or(false, |p| p.is_active);
+    if !provider_ok {
+        return Err(
+            "The provider configured for this prompt is no longer available. Edit the prompt to choose a different model."
+                .into(),
+        );
+    }
+    let model_ok = db::providers::get_model(&state.pool, &model_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_or(false, |m| m.enabled);
+    if !model_ok {
+        return Err(
+            "The model configured for this prompt is no longer available. Edit the prompt to choose a different model."
+                .into(),
+        );
+    }
     let chat = match prompt.project_id.as_deref() {
         Some(pid) => chat::create_project_chat(&state.pool, &cfg, pid).await,
         None => chat::create_chat(&state.pool, &cfg).await,
@@ -1440,6 +1538,47 @@ async fn prompt_run(
             });
         }
         attachment_ids.push(att.id);
+    }
+    // The chat was created with the default model; pin the prompt's launch
+    // settings on it before the turn starts.
+    db::models::set_chat_model(
+        &state.pool,
+        &chat.id,
+        Some(&provider_id),
+        Some(&model_id),
+        now_ms(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    db::models::set_chat_thinking(
+        &state.pool,
+        &chat.id,
+        thinking_enabled,
+        Some(&thinking_effort),
+        now_ms(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    if ls.mode.is_some() {
+        db::models::set_chat_setting(&state.pool, &chat.id, "mode", &mode, now_ms())
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    if ls.command_toggle.is_some() {
+        db::models::set_chat_setting(
+            &state.pool,
+            &chat.id,
+            "command_toggle",
+            &command_toggle,
+            now_ms(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    }
+    if ls.edit_toggle.is_some() {
+        db::models::set_chat_setting(&state.pool, &chat.id, "edit_toggle", &edit_toggle, now_ms())
+            .await
+            .map_err(|e| e.to_string())?;
     }
     let text = if prompt.body.trim().is_empty() {
         prompt.title.clone()
@@ -1470,7 +1609,44 @@ async fn prompt_run(
         .ok_or_else(|| "chat not found after create".to_string())
 }
 
-// --- projects ---
+#[derive(serde::Serialize)]
+struct PromptThinkingInfo {
+    supports: bool,
+    supports_effort: bool,
+}
+
+#[tauri::command]
+async fn prompt_thinking_info(
+    provider_id: Option<String>,
+    model_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<PromptThinkingInfo, String> {
+    let cfg = state.config.read().unwrap().clone();
+    let pid = provider_id
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.defaults.main_model.as_ref().map(|m| m.provider.clone()));
+    let mid = model_id
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.defaults.main_model.as_ref().map(|m| m.model.clone()));
+    let (Some(pid), Some(mid)) = (pid, mid) else {
+        return Ok(PromptThinkingInfo {
+            supports: false,
+            supports_effort: false,
+        });
+    };
+    let prov = db::providers::get_provider(&state.pool, &pid)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "provider not found".to_string())?;
+    let model = db::providers::get_model(&state.pool, &mid)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "model not found".to_string())?;
+    Ok(PromptThinkingInfo {
+        supports: crate::providers::supports_thinking(&prov.kind, &model.name),
+        supports_effort: crate::providers::supports_thinking_effort(&prov.kind, &model.name),
+    })
+}
 
 #[tauri::command]
 async fn project_create(
@@ -3301,6 +3477,9 @@ pub fn run() {
             chat_reorder,
             chat_set_model,
             chat_set_thinking,
+            chat_set_mode,
+            chat_set_command_toggle,
+            chat_set_edit_toggle,
             chat_thinking_info,
             chat_set_project,
             chat_set_system_prompt,
@@ -3339,6 +3518,7 @@ pub fn run() {
             prompt_set_favorite,
             prompt_move,
             prompt_run,
+            prompt_thinking_info,
             agent_list,
             agent_presets,
             agent_detect,

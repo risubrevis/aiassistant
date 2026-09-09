@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking } from "$lib/stores/chat";
+  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking, setChatMode, setChatCommandToggle, setChatEditToggle } from "$lib/stores/chat";
   import type { UiMessage } from "$lib/stores/chat";
   import { config as configStore } from "$lib/stores/config";
   import { projects } from "$lib/stores/project";
-  import { configGet, setMode, setCommandToggle, setEditToggle, chatContextWindow, projectContextSummary, chatThinkingInfo, type Chat, type ChatSession, type ProjectContextSummary } from "$lib/tauri";
+  import { configGet, chatContextWindow, projectContextSummary, chatThinkingInfo, type Chat, type ChatSession, type ProjectContextSummary } from "$lib/tauri";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
@@ -125,9 +125,18 @@
         ? m.agent_no_agent()
         : m.agent_available(),
   );
-  let mode = $derived($configStore?.defaults.mode ?? "plan");
-  let commandToggle = $derived($configStore?.defaults.command_toggle ?? "manual");
-  let editToggle = $derived($configStore?.defaults.edit_toggle ?? "ask");
+  // Per-chat overrides stored in chat.settings JSON; fall back to global defaults.
+  function chatSetting(key: string, fallback: string): string {
+    try {
+      const v = chat.settings ? (JSON.parse(chat.settings) as Record<string, string>) : null;
+      return v?.[key] ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  let mode = $derived(chatSetting("mode", $configStore?.defaults.mode ?? "plan"));
+  let commandToggle = $derived(chatSetting("command_toggle", $configStore?.defaults.command_toggle ?? "manual"));
+  let editToggle = $derived(chatSetting("edit_toggle", $configStore?.defaults.edit_toggle ?? "ask"));
   let project = $derived($projects.find((p) => p.id === chat.project_id) ?? null);
   let rightSidebarOpen = $derived(project ? $rightSidebarOpenProject : $rightSidebarOpenStandalone);
   let counts = $derived(taskCounts($tasksByChat[chat.id] ?? []));
@@ -459,17 +468,17 @@
       </button>
       <div class="modes" title="Mode">
         {#each MODES as md}
-          <button class="mode-btn" class:active={mode === md} onclick={() => setMode(md)}>{md}</button>
+          <button class="mode-btn" class:active={mode === md} onclick={() => setChatMode(chat.id, md)}>{md}</button>
         {/each}
       </div>
       {#if mode === "write"}
         <div class="toggle" title="Commands: Manual/Auto">
-          <button class="mode-btn" class:active={commandToggle === "manual"} onclick={() => setCommandToggle("manual")}>Manual</button>
-          <button class="mode-btn" class:active={commandToggle === "auto"} onclick={() => setCommandToggle("auto")}>Auto</button>
+          <button class="mode-btn" class:active={commandToggle === "manual"} onclick={() => setChatCommandToggle(chat.id, "manual")}>Manual</button>
+          <button class="mode-btn" class:active={commandToggle === "auto"} onclick={() => setChatCommandToggle(chat.id, "auto")}>Auto</button>
         </div>
         <div class="toggle" title="Edits: Ask/Auto">
-          <button class="mode-btn" class:active={editToggle === "ask"} onclick={() => setEditToggle("ask")}>Ask</button>
-          <button class="mode-btn" class:active={editToggle === "auto"} onclick={() => setEditToggle("auto")}>Auto</button>
+          <button class="mode-btn" class:active={editToggle === "ask"} onclick={() => setChatEditToggle(chat.id, "ask")}>Ask</button>
+          <button class="mode-btn" class:active={editToggle === "auto"} onclick={() => setChatEditToggle(chat.id, "auto")}>Auto</button>
         </div>
       {/if}
       <ModelSelector chatId={chat.id} providerId={chat.provider_id} modelId={chat.model_id} />

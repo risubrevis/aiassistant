@@ -51,7 +51,7 @@
     try {
       await runPrompt(id);
     } catch (e) {
-      toast.error(m.prompt_run_missing_files(), e instanceof Error ? e.message : undefined);
+      toast.error(m.prompt_run_failed(), e instanceof Error ? e.message : undefined);
     }
   }
 </script>

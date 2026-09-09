@@ -1196,6 +1196,37 @@ async fn run_turn(
         .ok_or_else(|| anyhow::anyhow!("chat not found"))?;
     let project = projects::project_for_chat(&pool, &chat).await;
     let cfg = config.read().unwrap().clone();
+    // Per-chat overrides from the settings JSON; fall back to global defaults.
+    let mode = chat
+        .settings
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("mode")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| cfg.defaults.mode.clone());
+    let command_toggle = chat
+        .settings
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("command_toggle")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| cfg.defaults.command_toggle.clone());
+    let edit_toggle = chat
+        .settings
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("edit_toggle")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| cfg.defaults.edit_toggle.clone());
     let (pcfg, model, model_uuid) =
         match resolve_provider(&pool, &chat, project.as_ref(), &cfg).await {
             Some(v) => v,
@@ -1279,15 +1310,9 @@ async fn run_turn(
     let mut work = build_history_with_compaction(&history, session.as_ref(), &attachment_parts);
 
     // Effective system prompt (global + project + chat + rules + cross-chat).
-    let system =
-        rules::effective_system_prompt(&pool, &cfg, &chat, project.as_ref(), &cfg.defaults.mode)
-            .await;
+    let system = rules::effective_system_prompt(&pool, &cfg, &chat, project.as_ref(), &mode).await;
     // Minimal mode sends no system prompt — bare model only (docs/12).
-    let mut system = if cfg.defaults.mode == "minimal" {
-        None
-    } else {
-        system
-    };
+    let mut system = if mode == "minimal" { None } else { system };
     // Auto-pull files changed since the last turn into context (docs/08).
     if cfg.defaults.auto_pull_changes {
         if let Some(p) = project.as_ref() {
@@ -1306,7 +1331,7 @@ async fn run_turn(
     // RAG retrieval: embed the latest user message and pull relevant snippets
     // from indexed chat attachments + project files. No-op without an
     // embedding model; never breaks the turn on retrieval errors.
-    if cfg.defaults.mode != "minimal" {
+    if mode != "minimal" {
         if let Some(section) =
             crate::rag::retrieve_for_turn(&pool, &cfg, &chat.id, chat.project_id.as_deref(), &work)
                 .await
@@ -1319,7 +1344,7 @@ async fn run_turn(
     }
 
     // Project skills auto-discovery from .agents/skills/ (and legacy .skills/) (IDEAS: auto-connect skills).
-    let project_skills = if project.is_some() && cfg.defaults.mode != "minimal" {
+    let project_skills = if project.is_some() && mode != "minimal" {
         projects::discover_project_skills(&roots)
     } else {
         Vec::new()
@@ -1342,7 +1367,7 @@ async fn run_turn(
 
     // Worker agents from the DB: delegation tools + roster section (docs/07).
     // Minimal mode has no tools and no system prompt, so nothing is registered.
-    let agent_contracts: Vec<_> = if cfg.defaults.mode != "minimal" {
+    let agent_contracts: Vec<_> = if mode != "minimal" {
         crate::db::agents::list_active(&pool)
             .await
             .unwrap_or_default()
@@ -1362,7 +1387,7 @@ async fn run_turn(
     // Re-inject persisted tasks each turn (also restores state after context
     // compaction) and nudge when an open task list has gone stale. Minimal mode
     // sends no system prompt and has no todo_write tool, so skip both there.
-    if cfg.defaults.mode != "minimal" {
+    if mode != "minimal" {
         let chat_tasks = tasks::list_tasks(&pool, &chat.id).await.unwrap_or_default();
         if chat_tasks.is_empty() || !chat_tasks.iter().any(is_open_task) {
             task_nudge.reset(&chat_id);
@@ -1419,11 +1444,10 @@ async fn run_turn(
         .map(rules::project_cross_chat_mode)
         .unwrap_or_default();
     let in_project = project.is_some();
-    let mut registry =
-        ToolRegistry::builtin_for_mode_ctx(&cfg.defaults.mode, in_project, &cross_chat);
+    let mut registry = ToolRegistry::builtin_for_mode_ctx(&mode, in_project, &cross_chat);
     registry.remove_disabled(&cfg.defaults.disabled_tools);
-    mcp.add_to_registry(&mut registry, &cfg.defaults.mode).await;
-    if cfg.defaults.mode != "minimal" {
+    mcp.add_to_registry(&mut registry, &mode).await;
+    if mode != "minimal" {
         registry.register(Box::new(crate::tools::builtin::WebHookList));
         registry.register(Box::new(crate::tools::builtin::WebHookAdd));
         registry.register(Box::new(crate::tools::builtin::WebHookModify));
@@ -1435,7 +1459,7 @@ async fn run_turn(
             registry.register(Box::new(crate::tools::builtin::WebHookRun));
         }
     }
-    agents::add_to_registry(&mut registry, &agent_contracts, &cfg.defaults.mode);
+    agents::add_to_registry(&mut registry, &agent_contracts, &mode);
     if !project_skills.is_empty() {
         registry.register(Box::new(crate::tools::builtin::ConnectSkill::new(
             project_skills.clone(),
@@ -1752,9 +1776,9 @@ async fn run_turn(
                         cat,
                         &tc.name,
                         &args,
-                        &cfg.defaults.mode,
-                        &cfg.defaults.command_toggle,
-                        &cfg.defaults.edit_toggle,
+                        &mode,
+                        &command_toggle,
+                        &edit_toggle,
                         &cfg.permissions,
                     ),
                     None => Decision::Deny("tool not in registry".into()),
@@ -1773,6 +1797,7 @@ async fn run_turn(
                             args,
                             &turn_ctx,
                             &cfg,
+                            &mode,
                         )
                         .await
                     } else if is_ctx_tool {
@@ -2575,6 +2600,7 @@ async fn execute_agent_tool(
     args: serde_json::Value,
     ctx: &Arc<TurnCtx>,
     cfg: &Config,
+    mode: &str,
 ) -> crate::tools::ToolResult {
     let _ = app;
     let _ = block_id;
@@ -2626,7 +2652,6 @@ async fn execute_agent_tool(
     } else {
         String::new()
     };
-    let mode = cfg.defaults.mode.clone();
 
     // Build the subtask list.
     struct Sub {
@@ -2730,7 +2755,7 @@ async fn execute_agent_tool(
             prompt: s.prompt.clone(),
             subtask_index: i,
             cwd: cwd.clone(),
-            mode: mode.clone(),
+            mode: mode.to_string(),
             files: s.files.clone(),
             isolate,
             message_id: Some(assistant_id.to_string()),

@@ -293,6 +293,60 @@ export async function setChatThinking(id: string, enabled: boolean, effort: stri
   }
 }
 
+function mergeSetting(settings: string | null, key: string, value: string): string {
+  let obj: Record<string, unknown> = {};
+  try {
+    if (settings) obj = JSON.parse(settings) as Record<string, unknown>;
+  } catch {
+    obj = {};
+  }
+  obj[key] = value;
+  return JSON.stringify(obj);
+}
+
+export async function setChatMode(id: string, mode: string) {
+  try {
+    await ipc.chatSetMode(id, mode);
+    chats.update((list) =>
+      list.map((c) =>
+        c.id === id ? { ...c, settings: mergeSetting(c.settings, "mode", mode) } : c,
+      ),
+    );
+  } catch (e) {
+    console.error("chatSetMode failed", e);
+  }
+}
+
+export async function setChatCommandToggle(id: string, value: string) {
+  try {
+    await ipc.chatSetCommandToggle(id, value);
+    chats.update((list) =>
+      list.map((c) =>
+        c.id === id
+          ? { ...c, settings: mergeSetting(c.settings, "command_toggle", value) }
+          : c,
+      ),
+    );
+  } catch (e) {
+    console.error("chatSetCommandToggle failed", e);
+  }
+}
+
+export async function setChatEditToggle(id: string, value: string) {
+  try {
+    await ipc.chatSetEditToggle(id, value);
+    chats.update((list) =>
+      list.map((c) =>
+        c.id === id
+          ? { ...c, settings: mergeSetting(c.settings, "edit_toggle", value) }
+          : c,
+      ),
+    );
+  } catch (e) {
+    console.error("chatSetEditToggle failed", e);
+  }
+}
+
 export async function sendMessage(text: string, attachmentIds: string[] = [], skillIds: string[] = []) {
   const id = get(currentChatId);
   if (!id || (!text.trim() && attachmentIds.length === 0)) return;

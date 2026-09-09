@@ -1,14 +1,23 @@
 <script lang="ts">
-  import { MessageSquareText, X, Trash2, Plus, Paperclip, Star, Check } from "@lucide/svelte";
+  import { MessageSquareText, X, Trash2, Plus, Paperclip, Star, Check, ChevronDown, ChevronRight, Rocket } from "@lucide/svelte";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { m } from "$lib/i18n";
-  import Select from "./Select.svelte";
+  import Select, { type SelectItem } from "./Select.svelte";
   import RichTextEditor from "./RichTextEditor.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import { createPrompt, updatePrompt, deletePrompt } from "$lib/stores/prompts";
   import { projects } from "$lib/stores/project";
   import { skills as skillsStore } from "$lib/stores/skills";
-  import type { Prompt } from "$lib/tauri";
+  import { config as configStore } from "$lib/stores/config";
+  import {
+    providersActiveModels,
+    providersAllModels,
+    promptThinkingInfo,
+    type ModelOption,
+    type Prompt,
+    type PromptLaunchSettings,
+    type PromptThinkingInfo,
+  } from "$lib/tauri";
 
   let {
     open,
@@ -29,6 +38,20 @@
   let saving = $state(false);
   let confirmDeleteOpen = $state(false);
 
+  let launchSettings: PromptLaunchSettings = $state({
+    provider_id: null,
+    model_id: null,
+    mode: null,
+    command_toggle: null,
+    edit_toggle: null,
+    thinking_enabled: true,
+    thinking_effort: "medium",
+  });
+  let thinkingInfo: PromptThinkingInfo = $state({ supports: true, supports_effort: true });
+  let launchOpen = $state(true);
+  let activeModels = $state<ModelOption[]>([]);
+  let allModels = $state<ModelOption[]>([]);
+
   let canSave = $derived(title.trim().length > 0 && !saving);
 
   const projectItems = $derived([
@@ -36,8 +59,86 @@
     ...$projects.map((p) => ({ value: p.id, label: p.name })),
   ]);
 
+  const modelValue = $derived(
+    launchSettings.provider_id && launchSettings.model_id
+      ? `${launchSettings.provider_id}::${launchSettings.model_id}`
+      : "",
+  );
+  // Pinned model outside the active set: listed as disabled so the user can see and replace it.
+  const pinnedUnavailable = $derived.by(() => {
+    const { provider_id, model_id } = launchSettings;
+    if (!provider_id || !model_id) return null;
+    if (activeModels.some((o) => o.provider_id === provider_id && o.model_id === model_id)) {
+      return null;
+    }
+    return allModels.find((o) => o.provider_id === provider_id && o.model_id === model_id) ?? null;
+  });
+  const modelItems = $derived.by(() => {
+    const items: SelectItem[] = [{ value: "", label: m.prompt_launch_model_default() }];
+    const seen = new Set<string>();
+    for (const opt of activeModels) {
+      const value = `${opt.provider_id}::${opt.model_id}`;
+      if (seen.has(value)) continue;
+      seen.add(value);
+      items.push({ value, label: `${opt.provider_name} / ${opt.display_name || opt.model_name}` });
+    }
+    if (pinnedUnavailable) {
+      items.push({
+        value: `${pinnedUnavailable.provider_id}::${pinnedUnavailable.model_id}`,
+        label: `${pinnedUnavailable.provider_name} / ${pinnedUnavailable.display_name || pinnedUnavailable.model_name}`,
+        disabled: true,
+      });
+    }
+    return items;
+  });
+  const modeItems = $derived([
+    { value: "", label: m.prompt_launch_use_default() },
+    { value: "minimal", label: "Minimal" },
+    { value: "plan", label: "Plan" },
+    { value: "write", label: "Write" },
+  ]);
+  const commandItems = $derived([
+    { value: "", label: m.prompt_launch_use_default() },
+    { value: "manual", label: "Manual" },
+    { value: "auto", label: "Auto" },
+  ]);
+  const editItems = $derived([
+    { value: "", label: m.prompt_launch_use_default() },
+    { value: "ask", label: "Ask" },
+    { value: "auto", label: "Auto" },
+  ]);
+  const effortItems = $derived([
+    { value: "low", label: m.thinking_effort_low() },
+    { value: "medium", label: m.thinking_effort_medium() },
+    { value: "high", label: m.thinking_effort_high() },
+  ]);
+
   function basename(path: string): string {
     return path.split(/[/\\]/).pop() ?? path;
+  }
+
+  function pickModel(value: string) {
+    if (!value) {
+      launchSettings.provider_id = null;
+      launchSettings.model_id = null;
+      return;
+    }
+    const sep = value.indexOf("::");
+    launchSettings.provider_id = value.slice(0, sep);
+    launchSettings.model_id = value.slice(sep + 2);
+  }
+
+  async function loadModelOptions() {
+    try {
+      activeModels = await providersActiveModels();
+    } catch {
+      activeModels = [];
+    }
+    try {
+      allModels = await providersAllModels();
+    } catch {
+      allModels = [];
+    }
   }
 
   // Reset form state whenever the modal opens or the edited prompt changes.
@@ -49,6 +150,40 @@
     attachFiles = prompt?.attach_files ? [...prompt.attach_files] : [];
     selectedSkillIds = prompt?.skill_ids ? [...prompt.skill_ids] : [];
     isFavorite = prompt?.is_favorite ?? false;
+    launchOpen = true;
+    const defaults = $configStore?.defaults;
+    if (prompt?.launch_settings) {
+      launchSettings = { ...prompt.launch_settings };
+    } else {
+      // Pin the current defaults so the prompt reproduces today's behavior.
+      launchSettings = {
+        provider_id: defaults?.main_model?.provider ?? null,
+        model_id: defaults?.main_model?.model ?? null,
+        mode: defaults?.mode ?? "plan",
+        command_toggle: defaults?.command_toggle ?? "manual",
+        edit_toggle: defaults?.edit_toggle ?? "ask",
+        thinking_enabled: true,
+        thinking_effort: "medium",
+      };
+    }
+    void loadModelOptions();
+  });
+
+  $effect(() => {
+    if (!open) return;
+    const providerId = launchSettings.provider_id;
+    const modelId = launchSettings.model_id;
+    let cancelled = false;
+    promptThinkingInfo(providerId, modelId)
+      .then((info) => {
+        if (!cancelled) thinkingInfo = info;
+      })
+      .catch(() => {
+        if (!cancelled) thinkingInfo = { supports: true, supports_effort: true };
+      });
+    return () => {
+      cancelled = true;
+    };
   });
 
   function removeFile(index: number) {
@@ -81,10 +216,16 @@
     if (!trimmed || saving) return;
     saving = true;
     try {
+      const launch: PromptLaunchSettings = {
+        ...launchSettings,
+        mode: launchSettings.mode || null,
+        command_toggle: launchSettings.command_toggle || null,
+        edit_toggle: launchSettings.edit_toggle || null,
+      };
       if (prompt) {
-        await updatePrompt(prompt.id, trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite);
+        await updatePrompt(prompt.id, trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite, launch);
       } else {
-        await createPrompt(trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite);
+        await createPrompt(trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite, launch);
       }
       onclose();
     } finally {
@@ -204,6 +345,77 @@
               {/each}
             {/if}
           </div>
+        </div>
+        <div class="field">
+          <button class="launch-toggle" onclick={() => (launchOpen = !launchOpen)}>
+            {#if launchOpen}<ChevronDown size={13} />{:else}<ChevronRight size={13} />{/if}
+            <Rocket size={13} />
+            <span>{m.prompt_launch_settings()}</span>
+          </button>
+          {#if launchOpen}
+            <div class="launch-body">
+              <div class="row">
+                <div class="field">
+                  <span class="lbl">{m.prompt_launch_model()}</span>
+                  <Select value={modelValue} items={modelItems} onchange={pickModel} />
+                </div>
+                <div class="field">
+                  <span class="lbl">{m.prompt_launch_mode()}</span>
+                  <Select
+                    value={launchSettings.mode ?? ""}
+                    items={modeItems}
+                    onchange={(v) => (launchSettings.mode = v)}
+                  />
+                </div>
+              </div>
+              <div class="row">
+                <div class="field">
+                  <span class="lbl">{m.prompt_launch_commands()}</span>
+                  <Select
+                    value={launchSettings.command_toggle ?? ""}
+                    items={commandItems}
+                    onchange={(v) => (launchSettings.command_toggle = v)}
+                  />
+                </div>
+                <div class="field">
+                  <span class="lbl">{m.prompt_launch_edits()}</span>
+                  <Select
+                    value={launchSettings.edit_toggle ?? ""}
+                    items={editItems}
+                    onchange={(v) => (launchSettings.edit_toggle = v)}
+                  />
+                </div>
+              </div>
+              <div class="field">
+                <span class="lbl">{m.prompt_launch_thinking()}</span>
+                <div class="think-row">
+                  <div class="tg-group">
+                    <button
+                      class:active={launchSettings.thinking_enabled !== false}
+                      disabled={!thinkingInfo.supports}
+                      onclick={() => (launchSettings.thinking_enabled = true)}
+                    >{m.thinking_enabled()}</button>
+                    <button
+                      class:active={launchSettings.thinking_enabled === false}
+                      disabled={!thinkingInfo.supports}
+                      onclick={() => (launchSettings.thinking_enabled = false)}
+                    >{m.thinking_disabled()}</button>
+                  </div>
+                  <Select
+                    value={launchSettings.thinking_effort ?? "medium"}
+                    items={effortItems}
+                    disabled={!thinkingInfo.supports_effort || launchSettings.thinking_enabled === false}
+                    onchange={(v) => (launchSettings.thinking_effort = v)}
+                  />
+                </div>
+                {#if !thinkingInfo.supports}
+                  <span class="hint">{m.thinking_not_supported()}</span>
+                {:else if !thinkingInfo.supports_effort}
+                  <span class="hint">{m.thinking_effort_unavailable()}</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
         </div>
       </div>
       <footer class="foot">
@@ -460,5 +672,69 @@
   }
   .btn:disabled {
     opacity: 0.5;
+  }
+  .launch-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground);
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: default;
+    padding: 0;
+    align-self: flex-start;
+  }
+  .launch-toggle:hover {
+    color: var(--foreground);
+  }
+  .launch-toggle :global(svg) {
+    flex-shrink: 0;
+  }
+  .launch-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+  .tg-group {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+  .tg-group button {
+    padding: 0.25rem 0.55rem;
+    border: none;
+    background: transparent;
+    color: var(--foreground);
+    font-size: 0.75rem;
+    cursor: default;
+    white-space: nowrap;
+  }
+  .tg-group button:hover:not(:disabled) {
+    background: var(--accent);
+  }
+  .tg-group button.active {
+    background: var(--secondary);
+    color: var(--secondary-foreground);
+  }
+  .tg-group button:disabled {
+    opacity: 0.5;
+  }
+  .think-row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .hint {
+    font-size: 0.72rem;
+    color: var(--muted-foreground);
   }
 </style>
