@@ -11,7 +11,7 @@
     insertAllFileRefs,
     openProjectSettings,
   } from "$lib/stores/project";
-  import { rightSidebarWidth, setRightSidebarWidth, saveRightSidebarWidth } from "$lib/stores/layout";
+  import { rightSidebarWidthProject, setRightSidebarWidthProject, saveRightSidebarWidthProject, rightSidebarWidthStandalone, setRightSidebarWidthStandalone, saveRightSidebarWidthStandalone } from "$lib/stores/layout";
   import { formatSize } from "$lib/utils";
   import { m } from "$lib/i18n";
 
@@ -22,6 +22,7 @@
   }: { projectId?: string; projectName?: string; chatId?: string } = $props();
 
   let standalone = $derived(!projectId);
+  let rightSidebarWidth = $derived(standalone ? $rightSidebarWidthStandalone : $rightSidebarWidthProject);
 
   let paths = $state<ProjectPath[]>([]);
   let views = $derived(projectId ? ($changedFileViews[projectId] ?? []) : []);
@@ -152,17 +153,17 @@
   function onResizeMove(e: PointerEvent) {
     if (!resizing || !asideEl) return;
     const rect = asideEl.getBoundingClientRect();
-    setRightSidebarWidth(rect.right - e.clientX);
+    standalone ? setRightSidebarWidthStandalone(rect.right - e.clientX) : setRightSidebarWidthProject(rect.right - e.clientX);
   }
   function onResizeUp(e: PointerEvent) {
     if (!resizing) return;
     resizing = false;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-    saveRightSidebarWidth($rightSidebarWidth);
+    standalone ? saveRightSidebarWidthStandalone($rightSidebarWidthStandalone) : saveRightSidebarWidthProject($rightSidebarWidthProject);
   }
 </script>
 
-<aside class="ctx" bind:this={asideEl} style="width:{$rightSidebarWidth}px">
+<aside class="ctx" bind:this={asideEl} style="width:{rightSidebarWidth}px">
   <div
     class="resize-handle"
     class:active={resizing}

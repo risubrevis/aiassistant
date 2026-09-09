@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { settingsTab } from "$lib/stores/settings";
+  import { settingsNavWidth, setSettingsNavWidth, saveSettingsNavWidth } from "$lib/stores/layout";
   import { theme, applyTheme, type Theme } from "$lib/stores/theme";
   import {
     loadLanguageSetting,
@@ -100,10 +101,30 @@
       // Ignore write errors; config is still applied in-memory.
     }
   }
+
+  let navEl: HTMLElement | undefined = $state();
+  let resizing = $state(false);
+
+  function startResize(e: PointerEvent) {
+    e.preventDefault();
+    resizing = true;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+  function onResizeMove(e: PointerEvent) {
+    if (!resizing || !navEl) return;
+    const rect = navEl.getBoundingClientRect();
+    setSettingsNavWidth(e.clientX - rect.left);
+  }
+  function onResizeUp(e: PointerEvent) {
+    if (!resizing) return;
+    resizing = false;
+    try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+    saveSettingsNavWidth($settingsNavWidth);
+  }
 </script>
 
 <div class="settings-win">
-  <nav class="settings-nav">
+  <nav class="settings-nav" bind:this={navEl} style="width:{$settingsNavWidth}px">
     {#each tabs as t}
       <button
         class="settings-nav-item"
@@ -113,6 +134,17 @@
         {t.label}
       </button>
     {/each}
+    <div
+      class="resize-handle"
+      class:active={resizing}
+      role="separator"
+      aria-orientation="vertical"
+      tabindex="-1"
+      onpointerdown={startResize}
+      onpointermove={onResizeMove}
+      onpointerup={onResizeUp}
+      onpointercancel={onResizeUp}
+    ></div>
   </nav>
 
   <section class="settings-content">
@@ -190,13 +222,14 @@
     overflow: hidden;
   }
   .settings-nav {
-    width: 160px;
     border-right: 1px solid var(--border);
     padding: 0.5rem;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
     gap: 0.125rem;
+    flex-shrink: 0;
+    position: relative;
   }
   .settings-nav-item {
     text-align: left;
@@ -215,6 +248,21 @@
   .settings-nav-item.active {
     background-color: var(--secondary);
     color: var(--secondary-foreground);
+  }
+  .resize-handle {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    bottom: 0;
+    width: 7px;
+    z-index: 10;
+    cursor: col-resize;
+    background: transparent;
+  }
+  .resize-handle:hover,
+  .resize-handle.active {
+    background-color: var(--ring);
+    opacity: 0.35;
   }
   .settings-content {
     flex: 1;

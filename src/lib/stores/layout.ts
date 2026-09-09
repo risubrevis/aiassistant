@@ -1,8 +1,12 @@
 import { writable } from "svelte/store";
 
 const SIDEBAR_KEY = "aiassistant.layout.sidebarWidth";
-const RIGHT_KEY = "aiassistant.layout.rightSidebarWidth";
-const RIGHT_OPEN_KEY = "aiassistant.layout.rightSidebarOpen";
+const RIGHT_KEY_PROJECT = "aiassistant.layout.rightSidebarWidth.project";
+const RIGHT_KEY_STANDALONE = "aiassistant.layout.rightSidebarWidth.standalone";
+const RIGHT_KEY_LEGACY = "aiassistant.layout.rightSidebarWidth";
+const RIGHT_OPEN_PROJECT_KEY = "aiassistant.layout.rightSidebarOpen.project";
+const RIGHT_OPEN_STANDALONE_KEY = "aiassistant.layout.rightSidebarOpen.standalone";
+const RIGHT_OPEN_LEGACY_KEY = "aiassistant.layout.rightSidebarOpen";
 
 export const SIDEBAR_MIN = 180;
 export const SIDEBAR_MAX_RATIO = 0.5;
@@ -32,19 +36,36 @@ function readSidebar(): number {
   }
 }
 
-function readRight(): number {
+function readRightWidth(key: string): number {
   try {
-    const v = localStorage.getItem(RIGHT_KEY);
-    const n = v ? parseInt(v, 10) : DEFAULT_RIGHT;
+    const v = localStorage.getItem(key);
+    if (v !== null) {
+      const n = parseInt(v, 10);
+      return Number.isFinite(n) ? clampRight(n) : DEFAULT_RIGHT;
+    }
+    const legacy = localStorage.getItem(RIGHT_KEY_LEGACY);
+    const n = legacy ? parseInt(legacy, 10) : DEFAULT_RIGHT;
     return Number.isFinite(n) ? clampRight(n) : DEFAULT_RIGHT;
   } catch {
     return DEFAULT_RIGHT;
   }
 }
 
-function readRightOpen(): boolean {
+function readRightOpenProject(): boolean {
   try {
-    return localStorage.getItem(RIGHT_OPEN_KEY) !== "false";
+    const v = localStorage.getItem(RIGHT_OPEN_PROJECT_KEY);
+    if (v !== null) return v !== "false";
+    return localStorage.getItem(RIGHT_OPEN_LEGACY_KEY) !== "false";
+  } catch {
+    return true;
+  }
+}
+
+function readRightOpenStandalone(): boolean {
+  try {
+    const v = localStorage.getItem(RIGHT_OPEN_STANDALONE_KEY);
+    if (v !== null) return v !== "false";
+    return localStorage.getItem(RIGHT_OPEN_LEGACY_KEY) !== "false";
   } catch {
     return true;
   }
@@ -66,33 +87,100 @@ export function saveSidebarWidth(w: number) {
   }
 }
 
-export const rightSidebarWidth = writable<number>(
-  typeof window !== "undefined" ? readRight() : DEFAULT_RIGHT,
-);
+const SETTINGS_NAV_KEY = "aiassistant.layout.settingsNavWidth";
+export const SETTINGS_NAV_MIN = 120;
+export const SETTINGS_NAV_MAX = 360;
+const DEFAULT_SETTINGS_NAV = 160;
 
-export function setRightSidebarWidth(w: number) {
-  rightSidebarWidth.set(typeof window !== "undefined" ? clampRight(w) : Math.round(w));
+function clampSettingsNav(w: number): number {
+  return Math.min(Math.max(Math.round(w), SETTINGS_NAV_MIN), SETTINGS_NAV_MAX);
 }
 
-export function saveRightSidebarWidth(w: number) {
+function readSettingsNav(): number {
   try {
-    localStorage.setItem(RIGHT_KEY, String(w));
+    const v = localStorage.getItem(SETTINGS_NAV_KEY);
+    const n = v ? parseInt(v, 10) : DEFAULT_SETTINGS_NAV;
+    return Number.isFinite(n) ? clampSettingsNav(n) : DEFAULT_SETTINGS_NAV;
+  } catch {
+    return DEFAULT_SETTINGS_NAV;
+  }
+}
+
+export const settingsNavWidth = writable<number>(
+  typeof window !== "undefined" ? readSettingsNav() : DEFAULT_SETTINGS_NAV,
+);
+
+export function setSettingsNavWidth(w: number) {
+  settingsNavWidth.set(typeof window !== "undefined" ? clampSettingsNav(w) : Math.round(w));
+}
+
+export function saveSettingsNavWidth(w: number) {
+  try {
+    localStorage.setItem(SETTINGS_NAV_KEY, String(w));
   } catch {
     // localStorage unavailable; applies for this session only
   }
 }
 
-export const rightSidebarOpen = writable<boolean>(
-  typeof window !== "undefined" ? readRightOpen() : true,
+export const rightSidebarWidthProject = writable<number>(
+  typeof window !== "undefined" ? readRightWidth(RIGHT_KEY_PROJECT) : DEFAULT_RIGHT,
 );
 
-export function setRightSidebarOpen(v: boolean) {
-  rightSidebarOpen.set(v);
+export const rightSidebarWidthStandalone = writable<number>(
+  typeof window !== "undefined" ? readRightWidth(RIGHT_KEY_STANDALONE) : DEFAULT_RIGHT,
+);
+
+export function setRightSidebarWidthProject(w: number) {
+  rightSidebarWidthProject.set(typeof window !== "undefined" ? clampRight(w) : Math.round(w));
 }
 
-export function saveRightSidebarOpen(v: boolean) {
+export function setRightSidebarWidthStandalone(w: number) {
+  rightSidebarWidthStandalone.set(typeof window !== "undefined" ? clampRight(w) : Math.round(w));
+}
+
+export function saveRightSidebarWidthProject(w: number) {
   try {
-    localStorage.setItem(RIGHT_OPEN_KEY, String(v));
+    localStorage.setItem(RIGHT_KEY_PROJECT, String(w));
+  } catch {
+    // localStorage unavailable; applies for this session only
+  }
+}
+
+export function saveRightSidebarWidthStandalone(w: number) {
+  try {
+    localStorage.setItem(RIGHT_KEY_STANDALONE, String(w));
+  } catch {
+    // localStorage unavailable; applies for this session only
+  }
+}
+
+export const rightSidebarOpenProject = writable<boolean>(
+  typeof window !== "undefined" ? readRightOpenProject() : true,
+);
+
+export const rightSidebarOpenStandalone = writable<boolean>(
+  typeof window !== "undefined" ? readRightOpenStandalone() : true,
+);
+
+export function setRightSidebarOpenProject(v: boolean) {
+  rightSidebarOpenProject.set(v);
+}
+
+export function saveRightSidebarOpenProject(v: boolean) {
+  try {
+    localStorage.setItem(RIGHT_OPEN_PROJECT_KEY, String(v));
+  } catch {
+    // localStorage unavailable; applies for this session only
+  }
+}
+
+export function setRightSidebarOpenStandalone(v: boolean) {
+  rightSidebarOpenStandalone.set(v);
+}
+
+export function saveRightSidebarOpenStandalone(v: boolean) {
+  try {
+    localStorage.setItem(RIGHT_OPEN_STANDALONE_KEY, String(v));
   } catch {
     // localStorage unavailable; applies for this session only
   }

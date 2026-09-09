@@ -30,7 +30,7 @@
   } from "$lib/stores/agents";
   import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT } from "$lib/events";
   import { tasksByChat, tasksModalChatId, openTasksModal, closeTasksModal, taskCounts } from "$lib/stores/tasks";
-  import { rightSidebarOpen, setRightSidebarOpen, saveRightSidebarOpen } from "$lib/stores/layout";
+  import { rightSidebarOpenProject, setRightSidebarOpenProject, saveRightSidebarOpenProject, rightSidebarOpenStandalone, setRightSidebarOpenStandalone, saveRightSidebarOpenStandalone } from "$lib/stores/layout";
 
   let { chat }: { chat: Chat } = $props();
 
@@ -128,6 +128,7 @@
   let commandToggle = $derived($configStore?.defaults.command_toggle ?? "manual");
   let editToggle = $derived($configStore?.defaults.edit_toggle ?? "ask");
   let project = $derived($projects.find((p) => p.id === chat.project_id) ?? null);
+  let rightSidebarOpen = $derived(project ? $rightSidebarOpenProject : $rightSidebarOpenStandalone);
   let counts = $derived(taskCounts($tasksByChat[chat.id] ?? []));
   let ctxSummary = $state<ProjectContextSummary | null>(null);
   $effect(() => {
@@ -320,10 +321,10 @@
       </button>
       <button
         class="export-btn"
-        title={$rightSidebarOpen ? m.context_toggle_collapse() : m.context_toggle_expand()}
-        onclick={() => { const v = !$rightSidebarOpen; setRightSidebarOpen(v); saveRightSidebarOpen(v); }}
+        title={rightSidebarOpen ? m.context_toggle_collapse() : m.context_toggle_expand()}
+        onclick={() => { const v = !rightSidebarOpen; if (project) { setRightSidebarOpenProject(v); saveRightSidebarOpenProject(v); } else { setRightSidebarOpenStandalone(v); saveRightSidebarOpenStandalone(v); } }}
       >
-        {#if $rightSidebarOpen}<PanelRightOpen size={15} />{:else}<PanelRight size={15} />{/if}
+        {#if rightSidebarOpen}<PanelRightOpen size={15} />{:else}<PanelRight size={15} />{/if}
       </button>
     </header>
 
@@ -435,7 +436,7 @@
     {/if}
   </div>
 
-  {#if $rightSidebarOpen}
+  {#if rightSidebarOpen}
     {#if project}
       <ContextPanel projectId={project.id} projectName={project.name} chatId={chat.id} />
     {:else}
