@@ -1340,6 +1340,16 @@ export interface TurnErrorEvent {
 export function onChatTurnError(cb: (e: TurnErrorEvent) => void): Promise<UnlistenFn> {
   return listen<TurnErrorEvent>("chat:turn_error", (e) => cb(e.payload));
 }
+export interface StreamRetryEvent {
+  chat_id: string;
+  message_id: string;
+  attempt: number;
+  max_attempts: number;
+  detail: string;
+}
+export function onChatStreamRetry(cb: (e: StreamRetryEvent) => void): Promise<UnlistenFn> {
+  return listen<StreamRetryEvent>("chat:stream_retry", (e) => cb(e.payload));
+}
 export function onCompacted(cb: (s: ChatSession) => void): Promise<UnlistenFn> {
   return listen<ChatSession>("chat:compacted", (e) => cb(e.payload));
 }

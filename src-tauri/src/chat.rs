@@ -173,6 +173,15 @@ struct TurnErrorPayload {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct StreamRetryPayload {
+    chat_id: String,
+    message_id: String,
+    attempt: u32,
+    max_attempts: u32,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TasksUpdatePayload {
     pub chat_id: String,
     pub tasks: Vec<tasks::Task>,
@@ -1507,20 +1516,14 @@ async fn run_turn(
             thinking_effort: thinking_effort.clone(),
         };
 
-        let (tx, mut rx) = mpsc::channel::<CompleteEvent>(64);
-        let stream_err_slot = Arc::new(Mutex::new(None::<crate::providers::ProviderError>));
-        let stream_task = {
-            let provider: Box<dyn Provider + Send> = provider_dyn(&pcfg);
-            let slot = stream_err_slot.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = provider.stream_complete(req, tx).await {
-                    error!("provider stream error: {e}");
-                    if let Ok(mut g) = slot.lock() {
-                        *g = Some(e);
-                    }
-                }
-            })
-        };
+        // Auto-retry on retryable provider/network errors (network drop, rate
+        // limit, server/overloaded). Each retry resets the partial turn and tells
+        // the UI to clear already-streamed blocks via `chat:stream_retry`; after
+        // `stream_retries` attempts the error falls through to the manual Retry
+        // button (chat:turn_error).
+        let max_retries = cfg.defaults.stream_retries as usize;
+        let mut retry = 0usize;
+        let mut stream_err: Option<crate::providers::ProviderError> = None;
 
         let mut text_acc = String::new();
         let mut thinking_acc = String::new();
@@ -1531,91 +1534,147 @@ async fn run_turn(
         let mut finish_reason = "stop".to_string();
         let mut usage: Option<crate::providers::Usage> = None;
 
-        while let Some(ev) = rx.recv().await {
-            match ev {
-                CompleteEvent::BlockStart {
-                    block_id,
-                    block_type,
-                    info,
-                } => {
-                    block_kind.insert(block_id.clone(), block_type);
-                    block_starts.insert(block_id.clone(), std::time::Instant::now());
-                    if block_type == BlockType::ToolUse {
-                        if let Some(i) = &info {
-                            tool_calls.push(ToolCallAccum {
-                                block_id: block_id.clone(),
-                                name: i.name.clone(),
-                                id: i.tool_call_id.clone(),
-                                args: String::new(),
-                            });
+        loop {
+            if retry > 0 {
+                text_acc.clear();
+                thinking_acc.clear();
+                block_kind.clear();
+                tool_calls.clear();
+                block_starts.clear();
+                thinking_ms = 0;
+                finish_reason = "stop".to_string();
+                usage = None;
+                let _ = app.emit(
+                    "chat:stream_retry",
+                    StreamRetryPayload {
+                        chat_id: chat_id.clone(),
+                        message_id: assistant_id.clone(),
+                        attempt: retry as u32,
+                        max_attempts: max_retries as u32,
+                        detail: stream_err.as_ref().map(|e| e.detail()).unwrap_or_default(),
+                    },
+                );
+                let backoff_secs = 1u64 << (retry - 1).min(5);
+                warn!("retrying stream {retry}/{max_retries} for {chat_id} after {backoff_secs}s");
+                tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+            }
+
+            let (tx, mut rx) = mpsc::channel::<CompleteEvent>(64);
+            let stream_err_slot = Arc::new(Mutex::new(None::<crate::providers::ProviderError>));
+            let stream_task = {
+                let provider: Box<dyn Provider + Send> = provider_dyn(&pcfg);
+                let slot = stream_err_slot.clone();
+                let req = req.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = provider.stream_complete(req, tx).await {
+                        error!("provider stream error: {e}");
+                        if let Ok(mut g) = slot.lock() {
+                            *g = Some(e);
                         }
                     }
-                    let _ = app.emit(
-                        "chat:block_start",
-                        BlockStartPayload {
-                            chat_id: chat_id.clone(),
-                            message_id: assistant_id.clone(),
-                            block_id,
-                            block_type,
-                            info,
-                        },
-                    );
-                }
-                CompleteEvent::BlockDelta {
-                    block_id,
-                    text,
-                    partial_json,
-                } => {
-                    if let Some(t) = &text {
-                        match block_kind.get(&block_id) {
-                            Some(BlockType::Thinking) => thinking_acc.push_str(t),
-                            _ => text_acc.push_str(t),
+                })
+            };
+
+            while let Some(ev) = rx.recv().await {
+                match ev {
+                    CompleteEvent::BlockStart {
+                        block_id,
+                        block_type,
+                        info,
+                    } => {
+                        block_kind.insert(block_id.clone(), block_type);
+                        block_starts.insert(block_id.clone(), std::time::Instant::now());
+                        if block_type == BlockType::ToolUse {
+                            if let Some(i) = &info {
+                                tool_calls.push(ToolCallAccum {
+                                    block_id: block_id.clone(),
+                                    name: i.name.clone(),
+                                    id: i.tool_call_id.clone(),
+                                    args: String::new(),
+                                });
+                            }
                         }
+                        let _ = app.emit(
+                            "chat:block_start",
+                            BlockStartPayload {
+                                chat_id: chat_id.clone(),
+                                message_id: assistant_id.clone(),
+                                block_id,
+                                block_type,
+                                info,
+                            },
+                        );
                     }
-                    if let Some(pj) = &partial_json {
-                        if let Some(tc) = tool_calls.iter_mut().find(|t| t.block_id == block_id) {
-                            tc.args.push_str(pj);
+                    CompleteEvent::BlockDelta {
+                        block_id,
+                        text,
+                        partial_json,
+                    } => {
+                        if let Some(t) = &text {
+                            match block_kind.get(&block_id) {
+                                Some(BlockType::Thinking) => thinking_acc.push_str(t),
+                                _ => text_acc.push_str(t),
+                            }
                         }
-                    }
-                    let _ = app.emit(
-                        "chat:block_delta",
-                        BlockDeltaPayload {
-                            chat_id: chat_id.clone(),
-                            message_id: assistant_id.clone(),
-                            block_id,
-                            text,
-                            partial_json,
-                        },
-                    );
-                }
-                CompleteEvent::BlockStop { block_id } => {
-                    if let Some(start) = block_starts.remove(&block_id) {
-                        if block_kind.get(&block_id) == Some(&BlockType::Thinking) {
-                            thinking_ms += start.elapsed().as_millis() as i64;
+                        if let Some(pj) = &partial_json {
+                            if let Some(tc) = tool_calls.iter_mut().find(|t| t.block_id == block_id)
+                            {
+                                tc.args.push_str(pj);
+                            }
                         }
+                        let _ = app.emit(
+                            "chat:block_delta",
+                            BlockDeltaPayload {
+                                chat_id: chat_id.clone(),
+                                message_id: assistant_id.clone(),
+                                block_id,
+                                text,
+                                partial_json,
+                            },
+                        );
                     }
-                    let _ = app.emit(
-                        "chat:block_stop",
-                        BlockStopPayload {
-                            chat_id: chat_id.clone(),
-                            message_id: assistant_id.clone(),
-                            block_id,
-                        },
-                    );
-                }
-                CompleteEvent::Done {
-                    finish_reason: fr,
-                    usage: u,
-                } => {
-                    finish_reason = fr;
-                    usage = u;
+                    CompleteEvent::BlockStop { block_id } => {
+                        if let Some(start) = block_starts.remove(&block_id) {
+                            if block_kind.get(&block_id) == Some(&BlockType::Thinking) {
+                                thinking_ms += start.elapsed().as_millis() as i64;
+                            }
+                        }
+                        let _ = app.emit(
+                            "chat:block_stop",
+                            BlockStopPayload {
+                                chat_id: chat_id.clone(),
+                                message_id: assistant_id.clone(),
+                                block_id,
+                            },
+                        );
+                    }
+                    CompleteEvent::Done {
+                        finish_reason: fr,
+                        usage: u,
+                    } => {
+                        finish_reason = fr;
+                        usage = u;
+                    }
                 }
             }
-        }
-        let _ = stream_task.await;
-        let stream_err = stream_err_slot.lock().ok().and_then(|mut g| g.take());
-        if stream_err.is_some() {
-            finish_reason = "error".to_string();
+            let _ = stream_task.await;
+            let err = stream_err_slot.lock().ok().and_then(|mut g| g.take());
+            match err {
+                None => {
+                    stream_err = None;
+                    break;
+                }
+                Some(e) => {
+                    let retryable = e.retryable();
+                    stream_err = Some(e);
+                    if retryable && retry < max_retries {
+                        retry += 1;
+                        continue;
+                    }
+                    finish_reason = "error".to_string();
+                    break;
+                }
+            }
         }
 
         // Persist the assistant message for this iteration (text + tool_use blocks).

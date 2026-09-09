@@ -593,6 +593,7 @@
   "message_thinking": "Réflexion",
   "message_thought_for": "Réfléchi pendant {time}",
   "message_tools_count": "{n} outils",
+  "message_retrying": "Nouvelle tentative ({attempt}/{max})…",
   "message_waiting_approval": "En attente d'approbation",
   "message_waiting_input": "En attente de saisie",
   "message_show_details": "Afficher les détails",

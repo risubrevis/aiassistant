@@ -52,6 +52,13 @@ export interface TurnError {
 }
 export const turnErrorByMessage = writable<Record<string, TurnError>>({});
 
+export interface StreamRetry {
+  attempt: number;
+  max_attempts: number;
+  detail: string;
+}
+export const streamRetryByMessage = writable<Record<string, StreamRetry>>({});
+
 export type ChatSortMode = "updated" | "created" | "alpha" | "manual";
 export const chatSortMode = writable<ChatSortMode>(
   typeof localStorage !== "undefined"
@@ -675,16 +682,53 @@ export function applyMessageDone(e: ipc.MessageDoneEvent) {
   if (e.finish_reason !== "error") {
     turnErrorByMessage.update((m) => { const n = { ...m }; delete n[e.message_id]; return n; });
   }
+  streamRetryByMessage.update((s) => { const n = { ...s }; delete n[e.message_id]; return n; });
 }
 
 export function applyTurnError(e: ipc.TurnErrorEvent) {
   ensureAssistant(e.chat_id, e.message_id);
   turnErrorByMessage.update((m) => ({ ...m, [e.message_id]: { ...e } }));
   statusByChat.update((s) => ({ ...s, [e.chat_id]: "error" }));
+  streamRetryByMessage.update((s) => { const n = { ...s }; delete n[e.message_id]; return n; });
+}
+
+export function applyStreamRetry(e: ipc.StreamRetryEvent) {
+  ensureAssistant(e.chat_id, e.message_id);
+  messagesByChat.update((m) => {
+    const list = m[e.chat_id] ?? [];
+    const idx = list.findIndex((x) => x.id === e.message_id);
+    if (idx < 0) return m;
+    const next = [...list];
+    next[idx] = { ...next[idx], blocks: [], streaming: true };
+    return { ...m, [e.chat_id]: next };
+  });
+  streamRetryByMessage.update((s) => ({ ...s, [e.message_id]: { attempt: e.attempt, max_attempts: e.max_attempts, detail: e.detail } }));
 }
 
 export function applyStatus(e: ipc.StatusEvent) {
   statusByChat.update((s) => ({ ...s, [e.chat_id]: e.status }));
+  // Terminal states: no turn is running for this chat. Clear any stuck
+  // streaming flags and retry indicators (e.g. a cancel during a retry
+  // backoff aborts the task without emitting message_done).
+  if (e.status === "idle" || e.status === "cancelled") {
+    const ids: string[] = [];
+    messagesByChat.update((m) => {
+      const list = m[e.chat_id] ?? [];
+      if (!list.some((x) => x.streaming)) return m;
+      const next = list.map((x) => {
+        if (x.streaming) ids.push(x.id);
+        return x.streaming ? { ...x, streaming: false } : x;
+      });
+      return { ...m, [e.chat_id]: next };
+    });
+    if (ids.length) {
+      streamRetryByMessage.update((s) => {
+        const n = { ...s };
+        for (const id of ids) delete n[id];
+        return n;
+      });
+    }
+  }
 }
 
 export function applyChatRenamed(e: ipc.ChatRenamedEvent) {

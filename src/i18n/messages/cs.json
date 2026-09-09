@@ -593,6 +593,7 @@
   "message_thinking": "Uvažování",
   "message_thought_for": "Uvažoval {time}",
   "message_tools_count": "{n} nástrojů",
+  "message_retrying": "Opakuji pokus ({attempt}/{max})…",
   "message_waiting_approval": "Čeká na schválení",
   "message_waiting_input": "Čeká na vstup",
   "message_show_details": "Zobrazit detaily",

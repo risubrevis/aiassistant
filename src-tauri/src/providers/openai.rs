@@ -261,13 +261,13 @@ impl Provider for OpenAiProvider {
         let mut tool_blocks: HashMap<u32, ToolAccum> = HashMap::new();
 
         while let Some(event) = stream.next().await {
-            // Transport/decode errors must not discard already streamed content;
-            // finalize the partial turn gracefully.
             let event = match event {
                 Ok(ev) => ev,
                 Err(e) => {
-                    tracing::warn!("stream event error: {e}; finalizing partial turn");
-                    break;
+                    // Surface transport errors so the turn-level auto-retry can
+                    // reconnect (or, after retries are exhausted, show the manual
+                    // Retry button). A clean stream end returns None, not Err.
+                    return Err(ProviderError::Network(format!("stream interrupted: {e}")));
                 }
             };
             if event.data == "[DONE]" {

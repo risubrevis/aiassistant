@@ -28,6 +28,7 @@
     onChatPtyDone,
     onChatMessageDone,
     onChatTurnError,
+    onChatStreamRetry,
     onCompacted,
     onChatRenamed,
     onChatAskUser,
@@ -274,6 +275,7 @@
     onChatPtyDone((e) => chat.applyPtyDone(e));
     onChatMessageDone((e) => chat.applyMessageDone(e));
     onChatTurnError((e) => chat.applyTurnError(e));
+    onChatStreamRetry((e) => chat.applyStreamRetry(e));
     onCompacted((s) => chat.applyCompacted(s));
     onChatRenamed((e) => chat.applyChatRenamed(e));
     onChatAskUser((e) => project.applyAskUser(e));

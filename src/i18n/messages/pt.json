@@ -593,6 +593,7 @@
   "message_thinking": "Pensando",
   "message_thought_for": "Pensou por {time}",
   "message_tools_count": "{n} ferramentas",
+  "message_retrying": "Tentando novamente ({attempt}/{max})…",
   "message_waiting_approval": "Aguardando aprovação",
   "message_waiting_input": "Aguardando entrada",
   "message_show_details": "Mostrar detalhes",

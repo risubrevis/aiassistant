@@ -307,6 +307,11 @@ pub struct Defaults {
     /// Max LLM tool-call round-trips per turn (built-in agent loop).
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
+    /// Auto-retry attempts for retryable provider/network errors during a stream
+    /// (network drop, rate limit, server/overloaded error). 0 = fail immediately to
+    /// the manual Retry button; 3 = Zed-like reconnect-then-error behaviour.
+    #[serde(default = "default_stream_retries")]
+    pub stream_retries: u32,
 }
 
 fn default_mode() -> String {
@@ -323,6 +328,9 @@ fn default_collapse_pct() -> u32 {
 }
 fn default_max_turns() -> u32 {
     50
+}
+fn default_stream_retries() -> u32 {
+    3
 }
 /// A sane, provider-agnostic starter system prompt (editable in Settings → Prompts).
 fn default_system_prompt() -> String {
@@ -357,6 +365,7 @@ impl Default for Defaults {
             delete_to_trash: false,
             add_environment_info: true,
             max_turns: default_max_turns(),
+            stream_retries: default_stream_retries(),
         }
     }
 }

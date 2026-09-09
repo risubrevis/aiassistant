@@ -157,6 +157,7 @@ auto_pull_changes = true     # inject changed project files into context at turn
 delete_to_trash = false      # delete_path: move to OS trash/recycle bin instead of permanent removal
 add_environment_info = true  # inject environment.md (user-editable OS info) into the prompt
 rag_enabled = true           # RAG master switch: index attachments/project files + retrieval
+stream_retries = 3           # auto-retry attempts on retryable stream errors (network/rate-limit/server); 0 = fail fast to manual Retry
 
 [hotkeys]
 new_chat = "CmdOrCtrl+N"

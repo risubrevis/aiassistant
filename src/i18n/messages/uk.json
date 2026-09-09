@@ -593,6 +593,7 @@
   "message_thinking": "Роздуми",
   "message_thought_for": "Розмірковував {time}",
   "message_tools_count": "{n} інструментів",
+  "message_retrying": "Повторна спроба ({attempt}/{max})…",
   "message_waiting_approval": "Очікує підтвердження",
   "message_waiting_input": "Очікує введення",
   "message_show_details": "Показати деталі",

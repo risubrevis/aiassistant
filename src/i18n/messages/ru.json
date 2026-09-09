@@ -593,6 +593,7 @@
   "message_thinking": "Размышление",
   "message_thought_for": "Размышлял {time}",
   "message_tools_count": "{n} инструментов",
+  "message_retrying": "Повторная попытка ({attempt}/{max})…",
   "message_waiting_approval": "Ожидает подтверждения",
   "message_waiting_input": "Ожидает ввода",
   "message_show_details": "Показать подробности",

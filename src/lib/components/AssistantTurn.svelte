@@ -20,6 +20,7 @@
     pendingApprovals,
     ptyByBlock,
     turnErrorByMessage,
+    streamRetryByMessage,
     regenerateMessage,
     retryTurn,
   } from "$lib/stores/chat";
@@ -120,6 +121,7 @@
 
   let firstMsg = $derived(messages[0]);
   let lastMsg = $derived(messages[messages.length - 1]);
+  let retryEntry = $derived($streamRetryByMessage[lastMsg.id]);
   let anyStreaming = $derived(messages.some((m) => m.streaming));
   let allThinking = $derived(messages.flatMap((m) => m.blocks.filter((b) => b.type === "thinking")));
   let allTools = $derived(messages.flatMap((m) => m.blocks.filter((b) => b.type === "tool_use")));
@@ -221,6 +223,13 @@
     {/each}
     {#if anyStreaming && answerTextBlocks.length > 0}
       <span class="cursor"></span>
+    {/if}
+
+    {#if retryEntry}
+      <div class="stream-retry">
+        <Loader size={13} class="spin" />
+        <span>{m.message_retrying({ attempt: retryEntry.attempt, max: retryEntry.max_attempts })}</span>
+      </div>
     {/if}
 
     {#if hasError}
@@ -740,4 +749,10 @@
     background: var(--muted); color: var(--foreground); cursor: pointer;
   }
   .retry-btn:hover { background: var(--accent); }
+  .stream-retry {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    font-size: 0.8125rem; color: var(--muted-foreground);
+    padding: 0.25rem 0;
+  }
+  .stream-retry :global(.spin) { animation: spin 0.9s linear infinite; }
 </style>

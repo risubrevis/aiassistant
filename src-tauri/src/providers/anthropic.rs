@@ -486,9 +486,40 @@ impl Provider for AnthropicProvider {
                         .and_then(Value::as_str)
                         .map(str::to_string)
                         .unwrap_or_else(|| event.data.clone());
-                    return Err(ProviderError::Parse(format!(
-                        "anthropic stream error: {msg}"
-                    )));
+                    let etype = data
+                        .pointer("/error/type")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let lc = msg.to_lowercase();
+                    let err = match etype {
+                        "overloaded_error" | "api_error" => ProviderError::Server(msg),
+                        "rate_limit_error" => ProviderError::RateLimit,
+                        "authentication_error" => ProviderError::Auth(msg),
+                        "billing_error" => ProviderError::InsufficientQuota,
+                        _ => {
+                            if ["billing", "credit", "balance", "quota"]
+                                .iter()
+                                .any(|s| lc.contains(s))
+                            {
+                                ProviderError::InsufficientQuota
+                            } else if ["prompt is too long", "too long", "context", "maximum"]
+                                .iter()
+                                .any(|s| lc.contains(s))
+                            {
+                                ProviderError::ContextLength
+                            } else if ["rate limit", "too many requests", "overloaded"]
+                                .iter()
+                                .any(|s| lc.contains(s))
+                            {
+                                ProviderError::RateLimit
+                            } else {
+                                // Unknown mid-stream errors are typically transient
+                                // provider issues; treat as retryable server error.
+                                ProviderError::Server(msg)
+                            }
+                        }
+                    };
+                    return Err(err);
                 }
                 _ => {}
             }
