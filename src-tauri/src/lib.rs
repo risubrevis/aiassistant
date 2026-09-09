@@ -2106,7 +2106,7 @@ async fn mcp_list(state: State<'_, AppState>) -> Result<Vec<mcp::McpServerInfo>,
 
 #[tauri::command]
 async fn mcp_refresh(state: State<'_, AppState>) -> Result<(), String> {
-    state.mcp.recheck_all().await;
+    state.mcp.recheck_all(&state.pool).await;
     Ok(())
 }
 
@@ -2123,7 +2123,7 @@ async fn mcp_create(
     input: McpServerInput,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<String, String> {
     if input.name.trim().is_empty() {
         return Err("mcp server name must not be empty".into());
     }
@@ -2139,13 +2139,12 @@ async fn mcp_create(
         .map_err(|e| e.to_string())?;
     state.mcp.sync_server(&row).await;
     if row.is_active_bool() {
-        if let Err(e) = state.mcp.connect(&row.id).await {
+        if let Err(e) = state.mcp.connect(&row.id, &state.pool).await {
             warn!("mcp connect '{}' failed: {e}", row.id);
-            state.mcp.set_error(&row.id, e.to_string()).await;
         }
     }
     let _ = app.emit("mcp:changed", ());
-    Ok(())
+    Ok(row.id)
 }
 
 #[tauri::command]
@@ -2171,9 +2170,8 @@ async fn mcp_update(
         .map_err(|e| e.to_string())?;
     state.mcp.sync_server(&row).await;
     if row.is_active_bool() {
-        if let Err(e) = state.mcp.connect(&row.id).await {
+        if let Err(e) = state.mcp.connect(&row.id, &state.pool).await {
             warn!("mcp connect '{}' failed: {e}", row.id);
-            state.mcp.set_error(&row.id, e.to_string()).await;
         }
     }
     let _ = app.emit("mcp:changed", ());
@@ -2183,6 +2181,9 @@ async fn mcp_update(
 #[tauri::command]
 async fn mcp_delete(id: String, state: State<'_, AppState>, app: AppHandle) -> Result<(), String> {
     state.mcp.delete_server(&id).await;
+    // Keyring OAuth tokens must be removed explicitly; the DB row cascades on delete.
+    let _ = secrets::delete_mcp_oauth_token(&id, "access");
+    let _ = secrets::delete_mcp_oauth_token(&id, "refresh");
     db::mcp_servers::delete(&state.pool, &id)
         .await
         .map_err(|e| e.to_string())?;
@@ -2217,9 +2218,8 @@ async fn mcp_set_active(
         .map_err(|e| e.to_string())?;
     state.mcp.set_active(&id, is_active).await;
     if is_active {
-        if let Err(e) = state.mcp.connect(&id).await {
+        if let Err(e) = state.mcp.connect(&id, &state.pool).await {
             warn!("mcp connect '{id}' failed: {e}");
-            state.mcp.set_error(&id, e.to_string()).await;
         }
     }
     let _ = app.emit("mcp:changed", ());
@@ -2303,6 +2303,308 @@ async fn mcp_webui_detect_favicon(
     current: Option<String>,
 ) -> Result<mcp::webui::DetectResult, String> {
     Ok(mcp::webui::detect_favicon(site_url, current).await)
+}
+
+// --- mcp oauth ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct McpOAuthStatus {
+    pub authenticated: bool,
+    pub expired: bool,
+    pub has_refresh_token: bool,
+    pub expires_at: i64,
+    pub auth_server_issuer: String,
+}
+
+#[tauri::command]
+async fn mcp_oauth_status(
+    server_id: String,
+    state: State<'_, AppState>,
+) -> Result<McpOAuthStatus, String> {
+    let row = db::mcp_oauth::get(&state.pool, &server_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let access_token = secrets::get_mcp_oauth_token(&server_id, "access");
+    let now = chrono::Utc::now().timestamp_millis();
+    Ok(match (row, access_token) {
+        (Some(o), Some(_)) => McpOAuthStatus {
+            authenticated: true,
+            expired: o.expires_at > 0 && now >= o.expires_at,
+            has_refresh_token: o.has_refresh_token_bool(),
+            expires_at: o.expires_at,
+            auth_server_issuer: o.auth_server_issuer,
+        },
+        (row, _) => McpOAuthStatus {
+            authenticated: false,
+            expired: false,
+            has_refresh_token: false,
+            expires_at: 0,
+            auth_server_issuer: row.map(|r| r.auth_server_issuer).unwrap_or_default(),
+        },
+    })
+}
+
+/// Find a free loopback port, run DCR and return (port, redirect_uri, registration).
+async fn oauth_new_registration(
+    metadata: &mcp::oauth::AuthServerMetadata,
+) -> Result<(u16, String, mcp::oauth::ClientRegistration), String> {
+    let port = mcp::oauth::find_free_port()
+        .await
+        .map_err(|e| e.to_string())?;
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let reg_ep = metadata
+        .registration_endpoint
+        .as_ref()
+        .ok_or("authorization server does not support dynamic client registration")?;
+    let reg = mcp::oauth::register_client(reg_ep, std::slice::from_ref(&redirect_uri))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok((port, redirect_uri, reg))
+}
+
+#[tauri::command]
+async fn mcp_oauth_start(
+    server_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let row = db::mcp_servers::get(&state.pool, &server_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("unknown mcp server: {server_id}"))?;
+    let body = row.body();
+    let url = body
+        .url
+        .clone()
+        .ok_or("OAuth requires an HTTP transport URL")?;
+
+    let existing = db::mcp_oauth::get(&state.pool, &server_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Reuse stored authorization-server metadata when present, else discover.
+    let metadata = match &existing {
+        Some(o) if !o.authorization_endpoint.is_empty() => mcp::oauth::AuthServerMetadata {
+            issuer: o.auth_server_issuer.clone(),
+            authorization_endpoint: o.authorization_endpoint.clone(),
+            token_endpoint: o.token_endpoint.clone(),
+            registration_endpoint: if o.registration_endpoint.is_empty() {
+                None
+            } else {
+                Some(o.registration_endpoint.clone())
+            },
+            revocation_endpoint: if o.revocation_endpoint.is_empty() {
+                None
+            } else {
+                Some(o.revocation_endpoint.clone())
+            },
+            code_challenge_methods_supported: vec!["S256".into()],
+            scopes_supported: o.scopes.split_whitespace().map(String::from).collect(),
+        },
+        _ => mcp::oauth::discover(&url)
+            .await
+            .map_err(|e| e.to_string())?,
+    };
+
+    // Determine the callback port, redirect_uri and client credentials.
+    // When re-using a stored client_id we try to bind the stored
+    // redirect_uri's port so the AS validates the redirect; if that port is
+    // taken, fall back to a fresh DCR with a new port.
+    let (port, redirect_uri, client_id, client_secret) = match &existing {
+        Some(o) if !o.client_id.is_empty() && !o.redirect_uri.is_empty() => {
+            let stored_port = reqwest::Url::parse(&o.redirect_uri)
+                .ok()
+                .and_then(|u| u.port());
+            let port_available = match stored_port {
+                Some(p) => tokio::net::TcpListener::bind(("127.0.0.1", p))
+                    .await
+                    .is_ok(),
+                None => false,
+            };
+            if port_available {
+                let p = stored_port.unwrap();
+                (
+                    p,
+                    o.redirect_uri.clone(),
+                    o.client_id.clone(),
+                    if o.client_secret.is_empty() {
+                        None
+                    } else {
+                        Some(o.client_secret.clone())
+                    },
+                )
+            } else {
+                let (p, uri, reg) = oauth_new_registration(&metadata).await?;
+                (p, uri, reg.client_id, reg.client_secret)
+            }
+        }
+        _ => {
+            let (p, uri, reg) = oauth_new_registration(&metadata).await?;
+            (p, uri, reg.client_id, reg.client_secret)
+        }
+    };
+
+    let registration = mcp::oauth::ClientRegistration {
+        client_id: client_id.clone(),
+        client_secret: client_secret.clone(),
+    };
+    let session = mcp::oauth::create_session(metadata.clone(), registration.clone(), port);
+    let scopes = metadata.scopes_supported.join(" ");
+    let auth_url = mcp::oauth::build_auth_url(&session, &url, &scopes);
+
+    // Persist metadata + registration before opening the browser; keep any
+    // existing token bookkeeping until the fresh exchange succeeds.
+    let (expires_at, has_refresh) = existing
+        .as_ref()
+        .map(|o| (o.expires_at, o.has_refresh_token_bool()))
+        .unwrap_or((0, false));
+    let input = db::mcp_oauth::McpOAuthInput::from_parts(
+        &server_id,
+        &metadata,
+        &registration,
+        &scopes,
+        &redirect_uri,
+        expires_at,
+        has_refresh,
+    );
+    db::mcp_oauth::upsert(&state.pool, &input)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    state.mcp.set_needs_auth(&server_id, false).await;
+    let _ = app.emit("mcp:changed", ());
+    app.opener()
+        .open_url(auth_url, None::<&str>)
+        .map_err(|e| e.to_string())?;
+
+    // Blocks until the browser redirect lands on the local callback server.
+    let (code, _) =
+        mcp::oauth::wait_for_callback(port, &session.state, std::time::Duration::from_secs(300))
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let tokens = mcp::oauth::exchange_code(
+        &metadata.token_endpoint,
+        &client_id,
+        client_secret.as_deref(),
+        &code,
+        &redirect_uri,
+        &session.code_verifier,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    secrets::set_mcp_oauth_token(&server_id, "access", &tokens.access_token)
+        .map_err(|e| e.to_string())?;
+    if let Some(rt) = &tokens.refresh_token {
+        let _ = secrets::set_mcp_oauth_token(&server_id, "refresh", rt);
+    }
+    db::mcp_oauth::update_tokens(
+        &state.pool,
+        &server_id,
+        tokens.expires_at,
+        tokens.refresh_token.is_some() || has_refresh,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    db::mcp_servers::set_active(&state.pool, &server_id, true)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.mcp.set_active(&server_id, true).await;
+    if let Err(e) = state.mcp.connect(&server_id, &state.pool).await {
+        warn!("mcp connect after oauth '{server_id}' failed: {e}");
+    }
+    let _ = app.emit("mcp:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn mcp_oauth_refresh(
+    server_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let oauth = db::mcp_oauth::get(&state.pool, &server_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or("no OAuth config for this server")?;
+    let refresh_token =
+        secrets::get_mcp_oauth_token(&server_id, "refresh").ok_or("no refresh token available")?;
+    let tokens = mcp::oauth::refresh_access_token(
+        &oauth.token_endpoint,
+        &oauth.client_id,
+        if oauth.client_secret.is_empty() {
+            None
+        } else {
+            Some(&oauth.client_secret)
+        },
+        &refresh_token,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    secrets::set_mcp_oauth_token(&server_id, "access", &tokens.access_token)
+        .map_err(|e| e.to_string())?;
+    if let Some(rt) = &tokens.refresh_token {
+        let _ = secrets::set_mcp_oauth_token(&server_id, "refresh", rt);
+    }
+    db::mcp_oauth::update_tokens(
+        &state.pool,
+        &server_id,
+        tokens.expires_at,
+        tokens.refresh_token.is_some() || oauth.has_refresh_token_bool(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let is_active = db::mcp_servers::get(&state.pool, &server_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some_and(|row| row.is_active_bool());
+    if is_active {
+        if let Err(e) = state.mcp.connect(&server_id, &state.pool).await {
+            warn!("mcp reconnect after refresh '{server_id}' failed: {e}");
+        }
+    }
+    let _ = app.emit("mcp:changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+async fn mcp_oauth_revoke(
+    server_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    // Best-effort revocation at the authorization server.
+    if let Some(oauth) = db::mcp_oauth::get(&state.pool, &server_id)
+        .await
+        .ok()
+        .flatten()
+    {
+        if !oauth.revocation_endpoint.is_empty() {
+            if let Some(token) = secrets::get_mcp_oauth_token(&server_id, "access") {
+                let _ =
+                    mcp::oauth::revoke_token(&oauth.revocation_endpoint, &token, "access_token")
+                        .await;
+            }
+            if let Some(token) = secrets::get_mcp_oauth_token(&server_id, "refresh") {
+                let _ =
+                    mcp::oauth::revoke_token(&oauth.revocation_endpoint, &token, "refresh_token")
+                        .await;
+            }
+        }
+    }
+    let _ = secrets::delete_mcp_oauth_token(&server_id, "access");
+    let _ = secrets::delete_mcp_oauth_token(&server_id, "refresh");
+    // Reset token bookkeeping; metadata is kept for re-authentication.
+    db::mcp_oauth::update_tokens(&state.pool, &server_id, 0, false)
+        .await
+        .map_err(|e| e.to_string())?;
+    state.mcp.set_active(&server_id, false).await;
+    let _ = app.emit("mcp:changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -2923,7 +3225,7 @@ pub fn run() {
                 if let Err(e) = mcp_bg.reload(&pool_for_mcp).await {
                     tracing::warn!("mcp reload failed: {e}");
                 }
-                mcp_bg.connect_all().await;
+                mcp_bg.connect_all(&pool_for_mcp).await;
             });
 
             let watcher = ProjectWatcher::new();
@@ -3115,6 +3417,10 @@ pub fn run() {
             mcp_webui_list,
             mcp_webui_open,
             mcp_webui_detect_favicon,
+            mcp_oauth_start,
+            mcp_oauth_status,
+            mcp_oauth_refresh,
+            mcp_oauth_revoke,
             pending_list,
             pending_approve,
             pending_reject,

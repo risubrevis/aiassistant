@@ -10,13 +10,18 @@
     mcpReorder,
     mcpSetActive,
     onMcpChanged,
+    mcpOAuthStart,
+    mcpOAuthRefresh,
+    mcpOAuthRevoke,
     type McpServerInfo,
     type McpServerInput,
     type McpBody,
+    type McpOAuthStatus,
   } from "$lib/tauri";
   import { m as msg } from "$lib/i18n";
-  import { Plus, RefreshCw, Trash2, Pencil, Wrench, X, Globe, ArrowUp, ArrowDown } from "@lucide/svelte";
+  import { Plus, RefreshCw, Trash2, Pencil, Wrench, X, Globe, ArrowUp, ArrowDown, LogIn, LogOut, Loader } from "@lucide/svelte";
   import McpWebUiModal from "./McpWebUiModal.svelte";
+  import ConfirmDialog from "./ConfirmDialog.svelte";
 
   const DEF_TEMPLATE = `{
   "command": "npx",
@@ -41,6 +46,13 @@
 
   let deleteId = $state<string | null>(null);
   let webUiFor = $state<string | null>(null);
+
+  let oauthLoading = $state<string | null>(null); // server_id being auth'd
+  let oauthError = $state<string | null>(null);
+
+  // OAuth confirmation dialog
+  let oauthPromptId = $state<string | null>(null); // server_id pending OAuth confirm
+  let oauthPromptLoading = $state(false);
 
   let unlistenMcp: (() => void) | undefined;
   onMount(() => {
@@ -69,6 +81,7 @@
 
   function dotClass(s: McpServerInfo): string {
     if (s.status === "connected") return "ok";
+    if (s.status === "needs_auth") return "warn";
     if (typeof s.status === "object") return "err";
     return "warn";
   }
@@ -77,8 +90,45 @@
     if (s.status === "connected") return "connected";
     if (s.status === "connecting") return "connecting";
     if (s.status === "disabled") return "inactive";
+    if (s.status === "needs_auth") return "authentication required";
     if (typeof s.status === "object") return s.status.error;
     return "";
+  }
+
+  async function signIn(s: McpServerInfo) {
+    oauthError = null;
+    oauthLoading = s.id;
+    try {
+      await mcpOAuthStart(s.id);
+      await fetchList();
+    } catch (e) {
+      oauthError = String(e);
+    } finally {
+      oauthLoading = null;
+    }
+  }
+
+  async function signOut(s: McpServerInfo) {
+    oauthError = null;
+    try {
+      await mcpOAuthRevoke(s.id);
+      await fetchList();
+    } catch (e) {
+      oauthError = String(e);
+    }
+  }
+
+  async function refreshToken(s: McpServerInfo) {
+    oauthError = null;
+    oauthLoading = s.id;
+    try {
+      await mcpOAuthRefresh(s.id);
+      await fetchList();
+    } catch (e) {
+      oauthError = String(e);
+    } finally {
+      oauthLoading = null;
+    }
   }
 
   async function toggleActive(s: McpServerInfo, active: boolean) {
@@ -177,6 +227,11 @@
       if (r.ok) {
         testState = "ok";
         testToolCount = r.tool_count;
+      } else if (r.needs_auth) {
+        testState = "fail";
+        testInfo = msg.mcp_oauth_test_detected();
+        // Offer to save and sign in
+        oauthPromptId = "test"; // special marker — means "save first, then OAuth"
       } else {
         testState = "fail";
         testInfo = r.error ?? "";
@@ -187,31 +242,70 @@
     }
   }
 
-  async function saveServer() {
+  async function saveServer(): Promise<string | null> {
     const parsed = parseBody();
     if (!parsed.ok) {
       modalError = parsed.reason;
-      return;
+      return null;
     }
     const name = formName.trim();
     if (!name) {
       modalError = msg.mcp_name_required();
-      return;
+      return null;
     }
     const title = formTitle.trim();
     if (!title) {
       modalError = msg.mcp_title_required();
-      return;
+      return null;
     }
     const input: McpServerInput = { title, name, body: parsed.body, is_active: formActive };
     try {
-      if (editId !== null) await mcpUpdate(editId, input);
-      else await mcpCreate(input);
+      let serverId: string;
+      if (editId !== null) {
+        await mcpUpdate(editId, input);
+        serverId = editId;
+      } else {
+        serverId = await mcpCreate(input);
+      }
       modalOpen = false;
       await fetchList();
+      // Auto-detect: if the server needs OAuth, prompt the user
+      const srv = servers.find((s) => s.id === serverId);
+      if (srv && srv.status === "needs_auth") {
+        oauthPromptId = serverId;
+      }
+      return serverId;
     } catch (e) {
       modalError = String(e);
+      return null;
     }
+  }
+
+  async function confirmOAuth() {
+    if (oauthPromptId === null) return;
+    oauthPromptLoading = true;
+    try {
+      if (oauthPromptId === "test") {
+        // Save the server first, then start OAuth
+        const id = await saveServer();
+        if (id) {
+          await mcpOAuthStart(id);
+          await fetchList();
+        }
+      } else {
+        await mcpOAuthStart(oauthPromptId);
+        await fetchList();
+      }
+    } catch (e) {
+      oauthError = String(e);
+    } finally {
+      oauthPromptLoading = false;
+      oauthPromptId = null;
+    }
+  }
+
+  function cancelOAuth() {
+    oauthPromptId = null;
   }
 
   async function confirmDelete() {
@@ -257,7 +351,8 @@
             <span class="name">{s.title}</span>
             <span class="sub">
               {s.name} · {s.transport} · {s.tool_count} tool(s){#if typeof s.status === "object"} ·
-                {s.status.error}{/if}
+                {s.status.error}{/if}{#if s.status === "needs_auth"} · {msg.mcp_oauth_required()}{/if}{#if
+                s.auth_expired} · {msg.mcp_oauth_expired()}{/if}
             </span>
           </div>
           <input
@@ -294,6 +389,29 @@
           >
             <Wrench size={13} />
           </button>
+          {#if s.status === "needs_auth"}
+            <button
+              class="icon-btn auth"
+              title={oauthLoading === s.id ? msg.mcp_oauth_authenticating() : msg.mcp_oauth_sign_in()}
+              disabled={oauthLoading === s.id}
+              onclick={() => void signIn(s)}
+            >
+              {#if oauthLoading === s.id}
+                <Loader size={13} class="spin" />
+              {:else}
+                <LogIn size={13} />
+              {/if}
+            </button>
+          {/if}
+          {#if s.oauth_authenticated && s.status === "connected"}
+            <button
+              class="icon-btn"
+              title={msg.mcp_oauth_sign_out()}
+              onclick={() => void signOut(s)}
+            >
+              <LogOut size={13} />
+            </button>
+          {/if}
           <button class="icon-btn" title={msg.common_edit()} onclick={() => openEdit(s)}>
             <Pencil size={13} />
           </button>
@@ -322,6 +440,7 @@
     {/if}
   </div>
   {#if error}<div class="err">{error}</div>{/if}
+  {#if oauthError}<div class="err">{oauthError}</div>{/if}
 </div>
 
 {#if modalOpen}
@@ -361,7 +480,7 @@
         <button class="btn" onclick={runTest} disabled={testState === "testing"}>{msg.mcp_test()}</button>
         <div class="spacer"></div>
         <button class="btn ghost" onclick={closeModal}>{msg.common_cancel()}</button>
-        <button class="btn primary" onclick={saveServer}>{msg.common_save()}</button>
+        <button class="btn primary" onclick={() => void saveServer()}>{msg.common_save()}</button>
       </footer>
     </div>
   </div>
@@ -392,6 +511,17 @@
     onClose={() => (webUiFor = null)}
   />
 {/if}
+
+<ConfirmDialog
+  open={oauthPromptId !== null}
+  message={msg.mcp_oauth_prompt_message()}
+  confirmLabel={msg.mcp_oauth_prompt_confirm()}
+  variant="primary"
+  loading={oauthPromptLoading}
+  loadingLabel={msg.mcp_oauth_authenticating()}
+  onconfirm={() => void confirmOAuth()}
+  oncancel={cancelOAuth}
+/>
 
 <style>
   .mcp { display: flex; flex-direction: column; gap: 0.75rem; }
@@ -440,8 +570,23 @@
   .icon-btn.danger:hover {
     color: var(--destructive);
   }
+  .icon-btn.auth {
+    color: hsl(239 84% 67%);
+  }
+  .icon-btn.auth:hover {
+    background: var(--accent);
+    color: hsl(239 84% 72%);
+  }
   .icon-btn:disabled {
     opacity: 0.4;
+  }
+  :global(.spin) {
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .tools-panel { margin-left: 1.5rem; display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--accent); }
   .tools-title { font-size: 0.6875rem; color: var(--muted-foreground); }

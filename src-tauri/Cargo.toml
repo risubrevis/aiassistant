@@ -1,6 +1,6 @@
 [package]
 name = "aiassistant"
-version = "1.0.26"
+version = "1.0.27"
 description = "Provider-agnostic desktop app for chatting with LLMs and working on code projects."
 authors = ["AIAssistant"]
 edition = "2021"
@@ -49,6 +49,8 @@ uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 keyring = "3"
 regex = "1"
+# PKCE S256 code challenge (MCP OAuth).
+sha2 = "0.10"
 htmd = "0.5"
 similar = "2"
 portable-pty = "0.8"

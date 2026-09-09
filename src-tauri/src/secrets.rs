@@ -159,3 +159,44 @@ pub fn delete_web_search_api_key(id: &str) -> Result<()> {
         Err(e) => Err(anyhow::anyhow!(e)),
     }
 }
+
+/// OS keychain entry for an MCP OAuth token (`kind` is "access" or "refresh").
+fn mcp_oauth_entry(server_id: &str, kind: &str) -> Option<keyring::Entry> {
+    keyring::Entry::new("aiassistant", &format!("mcp-oauth:{server_id}:{kind}")).ok()
+}
+
+pub fn get_mcp_oauth_token(server_id: &str, kind: &str) -> Option<String> {
+    let entry = match mcp_oauth_entry(server_id, kind) {
+        Some(e) => e,
+        None => {
+            warn!("keychain unavailable for mcp-oauth:{server_id}:{kind}");
+            return None;
+        }
+    };
+    match entry.get_password() {
+        Ok(v) if !v.is_empty() => Some(v),
+        Ok(_) => None,
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            warn!("failed to read keyring for mcp-oauth:{server_id}:{kind}: {e}");
+            None
+        }
+    }
+}
+
+pub fn set_mcp_oauth_token(server_id: &str, kind: &str, token: &str) -> Result<()> {
+    let entry =
+        mcp_oauth_entry(server_id, kind).ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    entry.set_password(token)?;
+    Ok(())
+}
+
+pub fn delete_mcp_oauth_token(server_id: &str, kind: &str) -> Result<()> {
+    let entry =
+        mcp_oauth_entry(server_id, kind).ok_or_else(|| anyhow::anyhow!("keychain unavailable"))?;
+    match entry.delete_credential() {
+        Ok(_) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!(e)),
+    }
+}

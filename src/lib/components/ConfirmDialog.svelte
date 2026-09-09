@@ -7,6 +7,7 @@
     message,
     confirmLabel,
     cancelLabel,
+    variant = "danger",
     loading = false,
     loadingLabel,
     onconfirm,
@@ -16,6 +17,7 @@
     message: string;
     confirmLabel?: string;
     cancelLabel?: string;
+    variant?: "danger" | "primary";
     loading?: boolean;
     loadingLabel?: string;
     onconfirm: () => void;
@@ -48,7 +50,13 @@
       <footer class="foot">
         <span class="spacer"></span>
         <button class="btn" onclick={oncancel} disabled={loading}>{cancel}</button>
-        <button class="btn danger" onclick={onconfirm} disabled={loading}>
+        <button
+          class="btn"
+          class:danger={variant === "danger"}
+          class:primary={variant === "primary"}
+          onclick={onconfirm}
+          disabled={loading}
+        >
           {#if loading}
             <LoaderCircle size={12} class="spin" /> {loadingText}
           {:else}
@@ -134,6 +142,18 @@
     background: var(--destructive);
   }
   .btn.danger:disabled {
+    filter: none;
+  }
+  .btn.primary {
+    background: hsl(239 84% 67%);
+    border-color: hsl(239 84% 67%);
+    color: white;
+  }
+  .btn.primary:hover {
+    filter: brightness(0.92);
+    background: hsl(239 84% 67%);
+  }
+  .btn.primary:disabled {
     filter: none;
   }
   :global(.spin) {

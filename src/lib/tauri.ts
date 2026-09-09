@@ -977,7 +977,12 @@ export interface McpBody {
   url?: string;
   headers?: Record<string, string>;
 }
-export type McpStatus = "disabled" | "connecting" | "connected" | { error: string };
+export type McpStatus =
+  | "disabled"
+  | "connecting"
+  | "connected"
+  | "needs_auth"
+  | { error: string };
 export interface McpServerInfo {
   id: string; // UUID
   name: string; // slug, used for mcp__<name>__<tool>
@@ -991,6 +996,9 @@ export interface McpServerInfo {
   webui_url: string;
   webui_icon: string;
   position: number;
+  needs_auth: boolean;
+  auth_expired: boolean;
+  oauth_authenticated: boolean;
 }
 export interface McpServerInput {
   title: string;
@@ -1003,11 +1011,12 @@ export interface McpTestResult {
   tool_count: number;
   tools: string[];
   error: string | null;
+  needs_auth: boolean;
 }
 export const mcpList = () => invoke<McpServerInfo[]>("mcp_list");
 export const mcpRefresh = () => invoke<void>("mcp_refresh");
 export const mcpTestDef = (body: McpBody) => invoke<McpTestResult>("mcp_test_def", { body });
-export const mcpCreate = (input: McpServerInput) => invoke<void>("mcp_create", { input });
+export const mcpCreate = (input: McpServerInput) => invoke<string>("mcp_create", { input });
 export const mcpUpdate = (id: string, input: McpServerInput) =>
   invoke<void>("mcp_update", { id, input });
 export const mcpDelete = (id: string) => invoke<void>("mcp_delete", { id });
@@ -1031,6 +1040,24 @@ export const mcpWebUiDetectFavicon = (siteUrl: string, current?: string | null) 
 export function onMcpChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("mcp:changed", () => cb());
 }
+
+// --- MCP OAuth ---
+
+export interface McpOAuthStatus {
+  authenticated: boolean;
+  expired: boolean;
+  has_refresh_token: boolean;
+  expires_at: number; // unix ms, 0 = unknown
+  auth_server_issuer: string;
+}
+export const mcpOAuthStart = (serverId: string) =>
+  invoke<void>("mcp_oauth_start", { serverId });
+export const mcpOAuthStatus = (serverId: string) =>
+  invoke<McpOAuthStatus>("mcp_oauth_status", { serverId });
+export const mcpOAuthRefresh = (serverId: string) =>
+  invoke<void>("mcp_oauth_refresh", { serverId });
+export const mcpOAuthRevoke = (serverId: string) =>
+  invoke<void>("mcp_oauth_revoke", { serverId });
 
 // --- Web Hooks (DB-backed) ---
 

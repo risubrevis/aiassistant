@@ -1,5 +1,6 @@
 pub mod client;
 pub mod config;
+pub mod oauth;
 pub mod webui;
 
 use std::collections::HashMap;
@@ -13,7 +14,8 @@ use sqlx::SqlitePool;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-use crate::db::mcp_servers;
+use crate::db::{mcp_oauth, mcp_servers};
+use crate::secrets;
 use crate::tools::{Tool, ToolCategory, ToolResult, ToolSpec};
 
 use client::{DynClient, HttpClient, McpTool, StdioClient};
@@ -27,6 +29,8 @@ pub enum Status {
     Connecting,
     Connected,
     Error(String),
+    /// OAuth required: the user must sign in (button in the UI).
+    NeedsAuth,
 }
 
 struct Conn {
@@ -39,6 +43,10 @@ struct Conn {
     webui_icon: String,
     position: i32,
     status: Status,
+    /// Last OAuth check found the access token expired with no usable refresh token.
+    oauth_expired: bool,
+    /// True when the server is connected via an OAuth bearer token.
+    oauth_authenticated: bool,
     transport: String,
     tools: Vec<McpTool>,
     client: Option<DynClient>,
@@ -67,6 +75,8 @@ impl Conn {
             webui_icon: row.webui_icon.clone(),
             position: row.position as i32,
             status,
+            oauth_expired: false,
+            oauth_authenticated: false,
             transport,
             tools: Vec::new(),
             client: None,
@@ -94,6 +104,12 @@ pub struct McpServerInfo {
     pub webui_url: String,
     pub webui_icon: String,
     pub position: i32,
+    /// True if the server requires OAuth and isn't authenticated.
+    pub needs_auth: bool,
+    /// True if the OAuth token is expired and can't be refreshed.
+    pub auth_expired: bool,
+    /// True when the server is currently connected via OAuth.
+    pub oauth_authenticated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,6 +118,8 @@ pub struct TestDefResult {
     pub tool_count: usize,
     pub tools: Vec<String>,
     pub error: Option<String>,
+    /// True when the probe received a 401, hinting that OAuth is required.
+    pub needs_auth: bool,
 }
 
 impl McpManager {
@@ -123,7 +141,7 @@ impl McpManager {
     }
 
     /// Connect to all active servers (best-effort; logs errors).
-    pub async fn connect_all(&self) {
+    pub async fn connect_all(&self, pool: &SqlitePool) {
         let ids: Vec<String> = {
             let conns = self.conns.lock().await;
             conns
@@ -133,12 +151,8 @@ impl McpManager {
                 .collect()
         };
         for id in ids {
-            if let Err(e) = self.connect(&id).await {
+            if let Err(e) = self.connect(&id, pool).await {
                 warn!("mcp connect '{id}' failed: {e}");
-                let mut conns = self.conns.lock().await;
-                if let Some(c) = conns.get_mut(&id) {
-                    c.status = Status::Error(e.to_string());
-                }
             }
         }
     }
@@ -152,21 +166,30 @@ impl McpManager {
         } else {
             return Err(anyhow::anyhow!("server has neither command nor url"));
         };
+        let tools = Self::probe(&client).await?;
+        Ok((client, tools))
+    }
+
+    /// `initialize` + `tools/list` against a freshly built client.
+    async fn probe(client: &DynClient) -> Result<Vec<McpTool>> {
         client
             .request(
                 "initialize",
                 serde_json::json!({
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "clientInfo": { "name": "aiassistant", "version": "1.0.0" }
+                    "clientInfo": { "name": "aiassistant", "version": env!("CARGO_PKG_VERSION") }
                 }),
             )
             .await?;
-        let tools = client.tools_list().await.unwrap_or_default();
-        Ok((client, tools))
+        Ok(client.tools_list().await.unwrap_or_default())
     }
 
-    pub async fn connect(&self, id: &str) -> Result<()> {
+    /// Connect to one server. HTTP transports negotiate OAuth automatically:
+    /// stored tokens are presented, expired ones refreshed, and a 401 without
+    /// stored tokens triggers authorization-server discovery (metadata only).
+    /// Status is fully managed here; callers must not override it on error.
+    pub async fn connect(&self, id: &str, pool: &SqlitePool) -> Result<()> {
         let body = {
             let conns = self.conns.lock().await;
             conns
@@ -174,15 +197,185 @@ impl McpManager {
                 .map(|c| c.body.clone())
                 .ok_or_else(|| anyhow::anyhow!("unknown server"))?
         };
-        let (client, tools) = Self::build_and_probe(&body).await?;
-        info!("mcp '{id}' connected: {} tool(s)", tools.len());
-        let mut conns = self.conns.lock().await;
-        if let Some(c) = conns.get_mut(id) {
-            c.client = Some(client);
-            c.tools = tools;
-            c.status = Status::Connected;
+        if body.command.is_some() {
+            return self.connect_simple(id, &body).await;
         }
-        Ok(())
+        let Some(url) = body.url.clone() else {
+            let err = anyhow::anyhow!("server has neither command nor url");
+            self.set_error(id, err.to_string()).await;
+            return Err(err);
+        };
+
+        if let Some(oauth) = mcp_oauth::get(pool, id).await.ok().flatten() {
+            if !oauth.client_id.is_empty() {
+                return self.connect_oauth(id, &body, &oauth, pool).await;
+            }
+        }
+
+        // No OAuth registration yet — connect plainly and detect a 401 challenge.
+        match self.connect_simple(id, &body).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let err_str = e.to_string();
+                if !is_auth_error(&err_str) {
+                    return Err(e);
+                }
+                match oauth::discover(&url).await {
+                    Ok(metadata) => {
+                        let scopes = metadata.scopes_supported.join(" ");
+                        let existing = mcp_oauth::get(pool, id).await.ok().flatten();
+                        let input = mcp_oauth::McpOAuthInput::from_parts(
+                            id,
+                            &metadata,
+                            &oauth::ClientRegistration {
+                                client_id: String::new(),
+                                client_secret: None,
+                            },
+                            &scopes,
+                            existing
+                                .as_ref()
+                                .map(|o| o.redirect_uri.as_str())
+                                .unwrap_or_default(),
+                            0,
+                            false,
+                        );
+                        let _ = mcp_oauth::upsert(pool, &input).await;
+                        self.set_needs_auth(id, false).await;
+                        Err(anyhow::anyhow!(
+                            "OAuth authentication required for this server"
+                        ))
+                    }
+                    // Discovery failed — keep the original transport error.
+                    Err(_) => Err(e),
+                }
+            }
+        }
+    }
+
+    /// Plain connect (stdio or unauthenticated HTTP); sets status on any outcome.
+    async fn connect_simple(&self, id: &str, body: &McpBody) -> Result<()> {
+        match Self::build_and_probe(body).await {
+            Ok((client, tools)) => {
+                info!("mcp '{id}' connected: {} tool(s)", tools.len());
+                let mut conns = self.conns.lock().await;
+                if let Some(c) = conns.get_mut(id) {
+                    c.client = Some(client);
+                    c.tools = tools;
+                    c.status = Status::Connected;
+                    c.oauth_authenticated = false;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                self.set_error(id, e.to_string()).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// HTTP connect with an OAuth-registered client: refresh an expired token
+    /// via the refresh grant, else present the stored access token.
+    async fn connect_oauth(
+        &self,
+        id: &str,
+        body: &McpBody,
+        oauth: &mcp_oauth::McpOAuthRow,
+        pool: &SqlitePool,
+    ) -> Result<()> {
+        let client_secret = if oauth.client_secret.is_empty() {
+            None
+        } else {
+            Some(oauth.client_secret.clone())
+        };
+        let is_expired =
+            oauth.expires_at > 0 && chrono::Utc::now().timestamp_millis() >= oauth.expires_at;
+
+        if !is_expired {
+            if let Some(token) = secrets::get_mcp_oauth_token(id, "access") {
+                return self.connect_with_token(id, body, &token).await;
+            }
+        } else if oauth.has_refresh_token_bool() {
+            if let Some(rt) = secrets::get_mcp_oauth_token(id, "refresh") {
+                match oauth::refresh_access_token(
+                    &oauth.token_endpoint,
+                    &oauth.client_id,
+                    client_secret.as_deref(),
+                    &rt,
+                )
+                .await
+                {
+                    Ok(tokens) => {
+                        Self::store_tokens(id, &tokens, pool, oauth.has_refresh_token_bool()).await;
+                        info!("mcp '{id}' oauth token refreshed");
+                        return self
+                            .connect_with_token(id, body, &tokens.access_token)
+                            .await;
+                    }
+                    Err(e) => warn!("mcp oauth refresh for '{id}' failed: {e}"),
+                }
+            }
+        }
+
+        if is_expired {
+            self.set_needs_auth(id, true).await;
+            Err(anyhow::anyhow!(
+                "OAuth token expired, re-authentication required"
+            ))
+        } else {
+            self.set_needs_auth(id, false).await;
+            Err(anyhow::anyhow!("OAuth authentication required"))
+        }
+    }
+
+    /// HTTP connect with an `Authorization: Bearer` header (the OAuth token
+    /// wins over any user-configured header of the same name).
+    async fn connect_with_token(&self, id: &str, body: &McpBody, token: &str) -> Result<()> {
+        let url = body
+            .url
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("server has no url"))?;
+        let mut headers = body.headers.clone();
+        headers.insert("Authorization".to_string(), format!("Bearer {token}"));
+        let client: DynClient = Arc::new(HttpClient::new(url, &headers)?);
+        match Self::probe(&client).await {
+            Ok(tools) => {
+                info!("mcp '{id}' connected (oauth): {} tool(s)", tools.len());
+                let mut conns = self.conns.lock().await;
+                if let Some(c) = conns.get_mut(id) {
+                    c.client = Some(client);
+                    c.tools = tools;
+                    c.status = Status::Connected;
+                    c.oauth_authenticated = true;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if is_auth_error(&msg) {
+                    self.set_needs_auth(id, false).await;
+                } else {
+                    self.set_error(id, msg).await;
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Persist a fresh token set: tokens in the OS keychain, expiry in the DB.
+    async fn store_tokens(
+        id: &str,
+        tokens: &oauth::TokenSet,
+        pool: &SqlitePool,
+        had_refresh: bool,
+    ) {
+        let _ = secrets::set_mcp_oauth_token(id, "access", &tokens.access_token);
+        if let Some(rt) = &tokens.refresh_token {
+            let _ = secrets::set_mcp_oauth_token(id, "refresh", rt);
+        }
+        let has_refresh = tokens.refresh_token.is_some() || had_refresh;
+        if let Err(e) = mcp_oauth::update_tokens(pool, id, tokens.expires_at, has_refresh).await {
+            warn!("mcp oauth token persist for '{id}' failed: {e}");
+        }
     }
 
     pub async fn list(&self) -> Vec<McpServerInfo> {
@@ -203,6 +396,9 @@ impl McpManager {
                 webui_url: c.webui_url.clone(),
                 webui_icon: c.webui_icon.clone(),
                 position: c.position,
+                needs_auth: matches!(c.status, Status::NeedsAuth),
+                auth_expired: c.oauth_expired,
+                oauth_authenticated: c.oauth_authenticated,
             })
             .collect()
     }
@@ -215,19 +411,24 @@ impl McpManager {
                 tool_count: tools.len(),
                 tools: tools.iter().map(|t| t.name.clone()).collect(),
                 error: None,
+                needs_auth: false,
             },
-            Err(e) => TestDefResult {
-                ok: false,
-                tool_count: 0,
-                tools: Vec::new(),
-                error: Some(e.to_string()),
-            },
+            Err(e) => {
+                let err_str = e.to_string();
+                TestDefResult {
+                    ok: false,
+                    tool_count: 0,
+                    tools: Vec::new(),
+                    error: Some(err_str.clone()),
+                    needs_auth: is_auth_error(&err_str),
+                }
+            }
         }
     }
 
     /// Drop existing clients and reconnect every configured server.
     /// In-flight calls are safe: `call_tool` clones the client Arc out of the lock.
-    pub async fn recheck_all(&self) {
+    pub async fn recheck_all(&self, pool: &SqlitePool) {
         let ids: Vec<(String, bool)> = {
             let conns = self.conns.lock().await;
             conns
@@ -249,11 +450,8 @@ impl McpManager {
                 }
             }
             if is_active {
-                if let Err(e) = self.connect(&id).await {
-                    let mut conns = self.conns.lock().await;
-                    if let Some(c) = conns.get_mut(&id) {
-                        c.status = Status::Error(e.to_string());
-                    }
+                if let Err(e) = self.connect(&id, pool).await {
+                    warn!("mcp recheck '{id}' failed: {e}");
                 }
             }
         }
@@ -279,8 +477,20 @@ impl McpManager {
 
     /// Mark a server as failed after a connect attempt (keeps the conn).
     pub async fn set_error(&self, id: &str, msg: String) {
-        if let Some(c) = self.conns.lock().await.get_mut(id) {
+        let mut conns = self.conns.lock().await;
+        if let Some(c) = conns.get_mut(id) {
             c.status = Status::Error(msg);
+            c.oauth_expired = false;
+        }
+    }
+
+    /// Mark a server as awaiting OAuth sign-in (`expired` = token lapsed and
+    /// can't be refreshed).
+    pub async fn set_needs_auth(&self, id: &str, expired: bool) {
+        let mut conns = self.conns.lock().await;
+        if let Some(c) = conns.get_mut(id) {
+            c.status = Status::NeedsAuth;
+            c.oauth_expired = expired;
         }
     }
 
@@ -353,6 +563,12 @@ impl McpManager {
             }
         }
     }
+}
+
+/// HTTP 401 responses from `HttpClient` render as "HTTP 401 …"; treat them as
+/// an auth challenge.
+fn is_auth_error(msg: &str) -> bool {
+    msg.contains("HTTP 401") || msg.contains("Unauthorized")
 }
 
 fn category_for(name: &str) -> ToolCategory {

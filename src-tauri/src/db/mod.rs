@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 pub mod agents;
 pub mod attachments;
+pub mod mcp_oauth;
 pub mod mcp_servers;
 pub mod memory;
 pub mod models;
