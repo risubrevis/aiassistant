@@ -220,7 +220,18 @@ export async function renameChat(id: string, title: string) {
 export async function toggleChatPinned(id: string, pinned: boolean) {
   try {
     await ipc.chatSetPinned(id, pinned);
-    chats.update((list) => list.map((c) => (c.id === id ? { ...c, pinned: pinned ? 1 : 0 } : c)));
+    const val = pinned ? 1 : 0;
+    chats.update((list) => list.map((c) => (c.id === id ? { ...c, pinned: val } : c)));
+    // Project chats are rendered from the projectChats store, not the global
+    // chats store — mirror the pin there too so the star updates and the chat
+    // sorts to the top of its project immediately.
+    projectChats.update((m) => {
+      const next = { ...m };
+      for (const pid of Object.keys(next)) {
+        next[pid] = next[pid].map((c) => (c.id === id ? { ...c, pinned: val } : c));
+      }
+      return next;
+    });
   } catch (e) {
     console.error("chatSetPinned failed", e);
   }

@@ -551,7 +551,16 @@
                 >
                   <span class="dot {statusClass($statusByChat[c.id])}"></span>
                   <span class="title">{c.title}</span>
-                  <Star size={13} class={c.pinned ? "star filled" : "star"} title={c.pinned ? m.ctx_unpin() : m.ctx_pin()} />
+                  <Star
+                    size={13}
+                    class={c.pinned ? "star filled" : "star"}
+                    title={c.pinned ? m.ctx_unpin() : m.ctx_pin()}
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      void toggleChatPinned(c.id, !c.pinned);
+                    }}
+                    onmousedown={(e) => e.stopPropagation()}
+                  />
                   <button
                     class="more"
                     onmousedown={(e) => e.stopPropagation()}
@@ -599,7 +608,16 @@
       >
         <span class="dot {statusClass($statusByChat[c.id])}"></span>
         <span class="title">{c.title}</span>
-        <Star size={13} class={c.pinned ? "star filled" : "star"} title={c.pinned ? m.ctx_unpin() : m.ctx_pin()} />
+        <Star
+          size={13}
+          class={c.pinned ? "star filled" : "star"}
+          title={c.pinned ? m.ctx_unpin() : m.ctx_pin()}
+          onclick={(e) => {
+            e.stopPropagation();
+            void toggleChatPinned(c.id, !c.pinned);
+          }}
+          onmousedown={(e) => e.stopPropagation()}
+        />
         <button
           class="more"
           onmousedown={(e) => e.stopPropagation()}
