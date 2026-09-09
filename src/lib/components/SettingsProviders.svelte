@@ -31,10 +31,33 @@
   } from "$lib/tauri";
   import Select from "./Select.svelte";
 
-  const kindItems = ["openai", "anthropic", "ollama", "custom"].map((v) => ({
-    value: v,
-    label: v,
-  }));
+  const kindItems: { value: string; label: string }[] = [
+    { value: "custom", label: "custom" },
+    { value: "openai", label: "openai" },
+    { value: "anthropic", label: "anthropic" },
+    { value: "ollama", label: "ollama" },
+    { value: "lm-studio-desktop", label: "LM Studio (Desktop)" },
+    { value: "lm-studio-server", label: "LM Studio (Server)" },
+  ];
+
+  const kindDefaults: Record<string, { name: string; base_url: string; timeout: number }> = {
+    openai: { name: "OpenAI", base_url: "https://api.openai.com/v1", timeout: 30_000 },
+    anthropic: { name: "Anthropic", base_url: "https://api.anthropic.com", timeout: 30_000 },
+    ollama: { name: "Ollama (local)", base_url: "http://localhost:11434/v1", timeout: 30_000 },
+    "lm-studio-desktop": { name: "LM Studio (Desktop)", base_url: "http://localhost:1234/v1", timeout: 120_000 },
+    "lm-studio-server": { name: "LM Studio (Server)", base_url: "http://localhost:1234/v1", timeout: 120_000 },
+  };
+
+  function onKindChange(value: string) {
+    formKind = value;
+    const d = kindDefaults[value];
+    if (!d) return;
+    formName = d.name;
+    formBaseUrl = d.base_url;
+    formTimeout = d.timeout;
+    modalError = "";
+    testInfo = "";
+  }
 
   type Row = {
     name: string;
@@ -141,7 +164,7 @@
 
   function openAdd() {
     editingId = null;
-    formKind = "openai";
+    formKind = "custom";
     formName = "";
     formBaseUrl = "";
     formApiKey = "";
@@ -477,7 +500,7 @@
       <div class="body">
         <div class="field">
           <span class="lbl">Kind</span>
-          <Select value={formKind} items={kindItems} onchange={(v) => (formKind = v)} />
+          <Select value={formKind} items={kindItems} onchange={onKindChange} />
         </div>
         <label class="field">
           <span class="lbl">Name</span>

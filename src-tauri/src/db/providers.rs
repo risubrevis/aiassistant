@@ -27,7 +27,7 @@ pub struct ProviderRow {
 pub struct ProviderInput {
     #[serde(default)]
     pub name: String,
-    /// openai | anthropic | ollama | custom
+    /// openai | anthropic | ollama | custom | lm-studio-desktop | lm-studio-server
     #[serde(default)]
     pub kind: String,
     #[serde(default)]

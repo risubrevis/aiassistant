@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "aiassistant"
-version = "1.0.25"
+version = "1.0.26"
 dependencies = [
  "anyhow",
  "async-trait",

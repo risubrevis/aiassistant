@@ -411,13 +411,15 @@ pub fn build(cfg: &crate::config::Provider) -> Option<Box<dyn Provider>> {
         crate::secrets::get_api_key(&cfg.api_key_ref)
     };
     match cfg.kind.as_str() {
-        "openai" | "ollama" | "custom" => Some(Box::new(OpenAiProvider::new(
-            cfg.base_url.clone(),
-            api_key,
-            cfg.extra_headers.clone(),
-            std::time::Duration::from_millis(cfg.timeout_ms),
-            &cfg.kind,
-        ))),
+        "openai" | "ollama" | "custom" | "lm-studio-desktop" | "lm-studio-server" => {
+            Some(Box::new(OpenAiProvider::new(
+                cfg.base_url.clone(),
+                api_key,
+                cfg.extra_headers.clone(),
+                std::time::Duration::from_millis(cfg.timeout_ms),
+                &cfg.kind,
+            )))
+        }
         "anthropic" => Some(Box::new(AnthropicProvider::new(
             cfg.base_url.clone(),
             api_key,

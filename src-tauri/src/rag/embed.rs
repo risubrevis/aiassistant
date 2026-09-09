@@ -33,7 +33,9 @@ pub async fn embed(pool: &SqlitePool, cfg: &Config, texts: &[String]) -> Result<
     let client = build_client(&pcfg);
     match pcfg.kind.as_str() {
         "ollama" => embed_ollama(&client, &pcfg.base_url, &model, texts).await,
-        "openai" | "custom" => embed_openai(&client, &pcfg.base_url, &model, texts).await,
+        "openai" | "custom" | "lm-studio-desktop" | "lm-studio-server" => {
+            embed_openai(&client, &pcfg.base_url, &model, texts).await
+        }
         other => anyhow::bail!("embedding not supported for provider kind '{other}'"),
     }
 }
