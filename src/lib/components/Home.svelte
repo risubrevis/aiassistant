@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Play } from "@lucide/svelte";
+  import { Play, LayoutTemplate } from "@lucide/svelte";
   import { m } from "$lib/i18n";
   import ActivityGraph from "./ActivityGraph.svelte";
   import { favoritePrompts, loadFavoritePrompts, runPrompt } from "$lib/stores/prompts";
@@ -57,7 +57,13 @@
               onclick={() => void onrun(prompt.id)}
             >
               <span class="prompt-name">{displayTitle(prompt)}</span>
-              <span class="prompt-run-icon"><Play size={12} /></span>
+              <span class="prompt-run-icon" class:tpl={prompt.is_template}>
+                {#if prompt.is_template}
+                  <LayoutTemplate size={12} />
+                {:else}
+                  <Play size={12} />
+                {/if}
+              </span>
             </button>
           {/each}
         {/if}
@@ -176,5 +182,8 @@
   .prompt-run-icon {
     flex-shrink: 0;
     color: #22c55e;
+  }
+  .prompt-run-icon.tpl {
+    color: #f59e0b;
   }
 </style>

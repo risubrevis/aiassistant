@@ -1,7 +1,8 @@
 //! Reusable prompts: user-defined prompt templates runnable from the Home
 //! view or the Prompts view. Running a prompt creates a NEW chat (standalone
-//! when project_id is NULL, or inside the linked project) and sends the
-//! prompt text with its attached files and skills.
+//! when project_id is NULL, or inside the linked project). Regular prompts
+//! send the prompt text with its attached files and skills; template prompts
+//! (is_template) only apply launch settings and leave the composer to the user.
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,7 @@ pub struct Prompt {
     pub attach_files: Vec<String>,
     pub skill_ids: Vec<String>,
     pub is_favorite: bool,
+    pub is_template: bool,
     pub launch_settings: PromptLaunchSettings,
     pub position: i64,
     pub created_at: i64,
@@ -46,14 +48,14 @@ pub struct PromptLaunchSettings {
 }
 
 const COLUMNS: &str = "id, title, body, project_id, attach_files, skill_ids, \
-     is_favorite, launch_settings, position, created_at, updated_at";
+     is_favorite, is_template, launch_settings, position, created_at, updated_at";
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
 /// JSON columns (attach_files, skill_ids, launch_settings) and the i64
-/// is_favorite need manual parsing, hence no sqlx::FromRow.
+/// boolean flags need manual parsing, hence no sqlx::FromRow.
 fn prompt_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Prompt> {
     Ok(Prompt {
         id: row.try_get("id")?,
@@ -63,6 +65,7 @@ fn prompt_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Prompt> {
         attach_files: serde_json::from_str(&row.try_get::<String, _>("attach_files")?)?,
         skill_ids: serde_json::from_str(&row.try_get::<String, _>("skill_ids")?)?,
         is_favorite: row.try_get::<i64, _>("is_favorite")? != 0,
+        is_template: row.try_get::<i64, _>("is_template")? != 0,
         launch_settings: serde_json::from_str(&row.try_get::<String, _>("launch_settings")?)
             .unwrap_or_default(),
         position: row.try_get("position")?,
@@ -107,6 +110,7 @@ pub async fn create(
     attach_files: &[String],
     skill_ids: &[String],
     is_favorite: bool,
+    is_template: bool,
     launch_settings: &PromptLaunchSettings,
 ) -> Result<Prompt> {
     let id = uuid::Uuid::new_v4().to_string();
@@ -118,9 +122,9 @@ pub async fn create(
     let position = max.unwrap_or(-1) + 1;
     sqlx::query(
         "INSERT INTO prompts \
-         (id, title, body, project_id, attach_files, skill_ids, is_favorite, launch_settings, \
-          position, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+         (id, title, body, project_id, attach_files, skill_ids, is_favorite, is_template, \
+          launch_settings, position, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
     )
     .bind(&id)
     .bind(title)
@@ -129,6 +133,7 @@ pub async fn create(
     .bind(serde_json::to_string(attach_files)?)
     .bind(serde_json::to_string(skill_ids)?)
     .bind(is_favorite as i64)
+    .bind(is_template as i64)
     .bind(serde_json::to_string(launch_settings)?)
     .bind(position)
     .bind(now)
@@ -151,11 +156,13 @@ pub async fn update(
     attach_files: &[String],
     skill_ids: &[String],
     is_favorite: bool,
+    is_template: bool,
     launch_settings: &PromptLaunchSettings,
 ) -> Result<Prompt> {
     sqlx::query(
         "UPDATE prompts SET title = ?1, body = ?2, project_id = ?3, attach_files = ?4, \
-         skill_ids = ?5, is_favorite = ?6, launch_settings = ?7, updated_at = ?8 WHERE id = ?9",
+         skill_ids = ?5, is_favorite = ?6, is_template = ?7, launch_settings = ?8, \
+         updated_at = ?9 WHERE id = ?10",
     )
     .bind(title)
     .bind(body)
@@ -163,6 +170,7 @@ pub async fn update(
     .bind(serde_json::to_string(attach_files)?)
     .bind(serde_json::to_string(skill_ids)?)
     .bind(is_favorite as i64)
+    .bind(is_template as i64)
     .bind(serde_json::to_string(launch_settings)?)
     .bind(now_ms())
     .bind(id)

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Star, Play, Pencil, Trash2, ChevronUp, ChevronDown } from "@lucide/svelte";
+  import { Star, Play, Pencil, Trash2, ChevronUp, ChevronDown, LayoutTemplate } from "@lucide/svelte";
   import { m } from "$lib/i18n";
   import type { Prompt } from "$lib/tauri";
 
@@ -65,6 +65,9 @@
     {#each prompt.attach_files as file (file)}
       <span class="badge" title={file}>{basename(file)}</span>
     {/each}
+    {#if prompt.is_template}
+      <span class="badge tpl-badge">{m.prompt_is_template()}</span>
+    {/if}
     {#each skillTitles as t, i (i)}
       <span class="badge">{t}</span>
     {/each}
@@ -117,17 +120,31 @@
       >
         <Trash2 size={13} />
       </button>
-      <button
-        class="act run"
-        title={m.prompt_run()}
-        onclick={(e) => {
-          e.stopPropagation();
-          onrun(prompt.id);
-        }}
-        onmousedown={(e) => e.stopPropagation()}
-      >
-        <Play size={13} />
-      </button>
+      {#if prompt.is_template}
+        <button
+          class="act tpl"
+          title={m.prompt_use_template()}
+          onclick={(e) => {
+            e.stopPropagation();
+            onrun(prompt.id);
+          }}
+          onmousedown={(e) => e.stopPropagation()}
+        >
+          <LayoutTemplate size={13} />
+        </button>
+      {:else}
+        <button
+          class="act run"
+          title={m.prompt_run()}
+          onclick={(e) => {
+            e.stopPropagation();
+            onrun(prompt.id);
+          }}
+          onmousedown={(e) => e.stopPropagation()}
+        >
+          <Play size={13} />
+        </button>
+      {/if}
     </div>
   </div>
 </div>
@@ -222,5 +239,12 @@
   }
   .act.run {
     color: #22c55e;
+  }
+  .act.tpl {
+    color: #f59e0b;
+  }
+  .tpl-badge {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
   }
 </style>

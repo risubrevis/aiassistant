@@ -1,4 +1,4 @@
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
 import * as ipc from "$lib/tauri";
 import type { Chat, Prompt, PromptLaunchSettings } from "$lib/tauri";
 import { chats, openChat } from "$lib/stores/chat";
@@ -7,6 +7,15 @@ import { loadProjectChats } from "$lib/stores/project";
 export const prompts = writable<Prompt[]>([]);
 
 export const favoritePrompts = writable<Prompt[]>([]);
+
+/** When set, the Composer populates itself with the template's text, skills,
+ * and attachment paths for the given chat — instead of sending immediately. */
+export const pendingTemplatePayload = writable<{
+  chatId: string;
+  text: string;
+  skillIds: string[];
+  attachPaths: string[];
+} | null>(null);
 
 export async function loadPrompts(): Promise<void> {
   try {
@@ -31,6 +40,7 @@ export async function createPrompt(
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  isTemplate: boolean,
   launchSettings: PromptLaunchSettings,
 ): Promise<Prompt | null> {
   try {
@@ -41,6 +51,7 @@ export async function createPrompt(
       attachFiles,
       skillIds,
       isFavorite,
+      isTemplate,
       launchSettings,
     );
     await loadPrompts();
@@ -60,10 +71,11 @@ export async function updatePrompt(
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  isTemplate: boolean,
   launchSettings: PromptLaunchSettings,
 ): Promise<void> {
   try {
-    await ipc.promptUpdate(id, title, body, projectId, attachFiles, skillIds, isFavorite, launchSettings);
+    await ipc.promptUpdate(id, title, body, projectId, attachFiles, skillIds, isFavorite, isTemplate, launchSettings);
     await loadPrompts();
     await loadFavoritePrompts();
   } catch (e) {
@@ -106,6 +118,10 @@ export async function movePrompt(id: string, toPosition: number): Promise<void> 
 // $chats.find(id)) and refresh the project's chat list so a project-bound prompt
 // shows up in the sidebar immediately instead of only after a restart.
 export async function runPrompt(id: string): Promise<Chat> {
+  const prompt =
+    get(prompts).find((p) => p.id === id) ??
+    get(favoritePrompts).find((p) => p.id === id) ??
+    null;
   const chat = await ipc.promptRun(id);
   chats.update((list) => (list.some((c) => c.id === chat.id) ? list : [chat, ...list]));
   if (chat.project_id) {
@@ -113,6 +129,15 @@ export async function runPrompt(id: string): Promise<Chat> {
   }
   await loadPrompts();
   await loadFavoritePrompts();
+  if (prompt?.is_template) {
+    const text = prompt.body.trim() ? `# ${prompt.title}\n\n${prompt.body}` : prompt.title;
+    pendingTemplatePayload.set({
+      chatId: chat.id,
+      text,
+      skillIds: [...prompt.skill_ids],
+      attachPaths: [...prompt.attach_files],
+    });
+  }
   await openChat(chat.id);
   return chat;
 }

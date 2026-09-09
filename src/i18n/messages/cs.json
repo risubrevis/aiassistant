@@ -740,5 +740,8 @@
   "prompt_run_failed": "Prompt nelze spustit",
   "prompt_standalone": "Samostatný",
   "prompt_move_up": "Posunout nahoru",
-  "prompt_move_down": "Posunout dolů"
+  "prompt_move_down": "Posunout dolů",
+  "prompt_is_template": "Šablona",
+  "prompt_is_template_hint": "Šablony vytvoří nový chat s textem promptu připraveným k úpravám místo okamžitého odeslání.",
+  "prompt_use_template": "Použít šablonu"
 }

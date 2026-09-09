@@ -1367,6 +1367,7 @@ async fn prompt_create(
     attach_files: Vec<String>,
     skill_ids: Vec<String>,
     is_favorite: bool,
+    is_template: bool,
     launch_settings: db::prompts::PromptLaunchSettings,
     state: State<'_, AppState>,
 ) -> Result<db::prompts::Prompt, String> {
@@ -1378,6 +1379,7 @@ async fn prompt_create(
         &attach_files,
         &skill_ids,
         is_favorite,
+        is_template,
         &launch_settings,
     )
     .await
@@ -1394,6 +1396,7 @@ async fn prompt_update(
     attach_files: Vec<String>,
     skill_ids: Vec<String>,
     is_favorite: bool,
+    is_template: bool,
     launch_settings: db::prompts::PromptLaunchSettings,
     state: State<'_, AppState>,
 ) -> Result<db::prompts::Prompt, String> {
@@ -1406,6 +1409,7 @@ async fn prompt_update(
         &attach_files,
         &skill_ids,
         is_favorite,
+        is_template,
         &launch_settings,
     )
     .await
@@ -1521,26 +1525,9 @@ async fn prompt_run(
     db::models::rename_chat(&state.pool, &chat.id, &prompt.title, now_ms())
         .await
         .map_err(|e| e.to_string())?;
-    let mut attachment_ids = Vec::with_capacity(prompt.attach_files.len());
-    for path in &prompt.attach_files {
-        let att = db::attachments::create(&state.pool, &chat.id, path)
-            .await
-            .map_err(|e| e.to_string())?;
-        // Index text attachments for RAG (no-op when no embedding model is set).
-        if rag::embed_enabled(&cfg) {
-            let pool_c = state.pool.clone();
-            let cfg_c = cfg.clone();
-            let att_c = att.clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = rag::index_attachment(&pool_c, &cfg_c, &att_c).await {
-                    tracing::warn!("rag index attachment failed: {e}");
-                }
-            });
-        }
-        attachment_ids.push(att.id);
-    }
     // The chat was created with the default model; pin the prompt's launch
-    // settings on it before the turn starts.
+    // settings on it before the turn starts (or, for templates, before the
+    // user manually edits and sends).
     db::models::set_chat_model(
         &state.pool,
         &chat.id,
@@ -1580,29 +1567,49 @@ async fn prompt_run(
             .await
             .map_err(|e| e.to_string())?;
     }
-    let text = if prompt.body.trim().is_empty() {
-        prompt.title.clone()
-    } else {
-        format!("# {}\n\n{}", prompt.title, prompt.body)
-    };
-    chat::send(
-        app,
-        state.pool.clone(),
-        state.config.clone(),
-        state.active.clone(),
-        state.approvals.clone(),
-        state.mcp.clone(),
-        state.pending.clone(),
-        state.pty.clone(),
-        state.ask.clone(),
-        state.task_nudge.clone(),
-        state.runner.clone(),
-        state.changes.clone(),
-        chat.id.clone(),
-        text,
-        attachment_ids,
-        prompt.skill_ids.clone(),
-    );
+    if !prompt.is_template {
+        let mut attachment_ids = Vec::with_capacity(prompt.attach_files.len());
+        for path in &prompt.attach_files {
+            let att = db::attachments::create(&state.pool, &chat.id, path)
+                .await
+                .map_err(|e| e.to_string())?;
+            // Index text attachments for RAG (no-op when no embedding model is set).
+            if rag::embed_enabled(&cfg) {
+                let pool_c = state.pool.clone();
+                let cfg_c = cfg.clone();
+                let att_c = att.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = rag::index_attachment(&pool_c, &cfg_c, &att_c).await {
+                        tracing::warn!("rag index attachment failed: {e}");
+                    }
+                });
+            }
+            attachment_ids.push(att.id);
+        }
+        let text = if prompt.body.trim().is_empty() {
+            prompt.title.clone()
+        } else {
+            format!("# {}\n\n{}", prompt.title, prompt.body)
+        };
+        chat::send(
+            app,
+            state.pool.clone(),
+            state.config.clone(),
+            state.active.clone(),
+            state.approvals.clone(),
+            state.mcp.clone(),
+            state.pending.clone(),
+            state.pty.clone(),
+            state.ask.clone(),
+            state.task_nudge.clone(),
+            state.runner.clone(),
+            state.changes.clone(),
+            chat.id.clone(),
+            text,
+            attachment_ids,
+            prompt.skill_ids.clone(),
+        );
+    }
     db::models::get_chat(&state.pool, &chat.id)
         .await
         .map_err(|e| e.to_string())?

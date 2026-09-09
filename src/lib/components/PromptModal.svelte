@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquareText, X, Trash2, Plus, Paperclip, Star, Check, ChevronDown, ChevronRight, Rocket } from "@lucide/svelte";
+  import { MessageSquareText, X, Trash2, Plus, Paperclip, Star, Check, ChevronDown, ChevronRight, Rocket, LayoutTemplate } from "@lucide/svelte";
   import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
   import { m } from "$lib/i18n";
   import Select, { type SelectItem } from "./Select.svelte";
@@ -35,6 +35,7 @@
   let attachFiles = $state<string[]>([]);
   let selectedSkillIds = $state<string[]>([]);
   let isFavorite = $state(false);
+  let isTemplate = $state(false);
   let saving = $state(false);
   let confirmDeleteOpen = $state(false);
 
@@ -150,6 +151,7 @@
     attachFiles = prompt?.attach_files ? [...prompt.attach_files] : [];
     selectedSkillIds = prompt?.skill_ids ? [...prompt.skill_ids] : [];
     isFavorite = prompt?.is_favorite ?? false;
+    isTemplate = prompt?.is_template ?? false;
     launchOpen = true;
     const defaults = $configStore?.defaults;
     if (prompt?.launch_settings) {
@@ -223,9 +225,9 @@
         edit_toggle: launchSettings.edit_toggle || null,
       };
       if (prompt) {
-        await updatePrompt(prompt.id, trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite, launch);
+        await updatePrompt(prompt.id, trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite, isTemplate, launch);
       } else {
-        await createPrompt(trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite, launch);
+        await createPrompt(trimmed, body, projectId, attachFiles, selectedSkillIds, isFavorite, isTemplate, launch);
       }
       onclose();
     } finally {
@@ -287,21 +289,31 @@
             minHeight="160px"
           />
         </div>
+        <div class="field">
+          <span class="lbl">{m.prompt_project()}</span>
+          <Select
+            value={projectId ?? ""}
+            items={projectItems}
+            onchange={(v) => (projectId = v === "" ? null : v)}
+          />
+        </div>
         <div class="row">
-          <div class="field">
-            <span class="lbl">{m.prompt_project()}</span>
-            <Select
-              value={projectId ?? ""}
-              items={projectItems}
-              onchange={(v) => (projectId = v === "" ? null : v)}
-            />
-          </div>
           <div class="field">
             <span class="lbl">{m.prompt_is_favorite()}</span>
             <button class="btn fav" class:on={isFavorite} onclick={() => (isFavorite = !isFavorite)}>
               <Star size={13} fill={isFavorite ? "currentColor" : "none"} />
               <span>{m.prompt_is_favorite()}</span>
             </button>
+          </div>
+          <div class="field">
+            <span class="lbl">{m.prompt_is_template()}</span>
+            <button class="btn tpl" class:on={isTemplate} onclick={() => (isTemplate = !isTemplate)}>
+              <LayoutTemplate size={13} />
+              <span>{m.prompt_is_template()}</span>
+            </button>
+            {#if isTemplate}
+              <span class="tpl-hint">{m.prompt_is_template_hint()}</span>
+            {/if}
           </div>
         </div>
         <div class="field">
@@ -652,6 +664,16 @@
   }
   .btn.fav.on {
     color: #f59e0b;
+  }
+  .btn.tpl.on {
+    color: #f59e0b;
+  }
+  .tpl-hint {
+    display: block;
+    margin-top: 0.25rem;
+    font-size: 0.65rem;
+    color: var(--muted-foreground);
+    line-height: 1.3;
   }
   .btn.primary {
     background: var(--primary);

@@ -740,5 +740,8 @@
   "prompt_run_failed": "Não foi possível executar o prompt",
   "prompt_standalone": "Avulso",
   "prompt_move_up": "Mover para cima",
-  "prompt_move_down": "Mover para baixo"
+  "prompt_move_down": "Mover para baixo",
+  "prompt_is_template": "Modelo",
+  "prompt_is_template_hint": "Modelos criam um novo chat com o texto do prompt pronto para editar em vez de enviar imediatamente.",
+  "prompt_use_template": "Usar modelo"
 }

@@ -740,5 +740,8 @@
   "prompt_run_failed": "Impossibile eseguire il prompt",
   "prompt_standalone": "Indipendente",
   "prompt_move_up": "Sposta su",
-  "prompt_move_down": "Sposta giù"
+  "prompt_move_down": "Sposta giù",
+  "prompt_is_template": "Modello",
+  "prompt_is_template_hint": "I modelli creano una nuova chat con il testo del prompt pronto da modificare invece di inviarlo immediatamente.",
+  "prompt_use_template": "Usa modello"
 }

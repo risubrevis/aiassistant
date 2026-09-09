@@ -740,5 +740,8 @@
   "prompt_run_failed": "Impossible d'exécuter le prompt",
   "prompt_standalone": "Hors projet",
   "prompt_move_up": "Monter",
-  "prompt_move_down": "Descendre"
+  "prompt_move_down": "Descendre",
+  "prompt_is_template": "Modèle",
+  "prompt_is_template_hint": "Les modèles créent un nouveau chat avec le texte du prompt prêt à éditer au lieu d'être envoyé immédiatement.",
+  "prompt_use_template": "Utiliser le modèle"
 }

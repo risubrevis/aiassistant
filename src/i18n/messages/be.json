@@ -740,5 +740,8 @@
   "prompt_run_failed": "Не ўдалося запусціць промпт",
   "prompt_standalone": "Асобны",
   "prompt_move_up": "Перасунуць уверх",
-  "prompt_move_down": "Перасунуць уніз"
+  "prompt_move_down": "Перасунуць уніз",
+  "prompt_is_template": "Шаблон",
+  "prompt_is_template_hint": "Шаблоны ствараюць новы чат з тэкстам промпту, гатовым да рэдагавання, замест неадкладнай адпраўкі.",
+  "prompt_use_template": "Выкарыстаць шаблон"
 }

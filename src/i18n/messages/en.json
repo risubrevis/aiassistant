@@ -740,5 +740,8 @@
   "prompt_run_failed": "Cannot run prompt",
   "prompt_standalone": "Standalone",
   "prompt_move_up": "Move up",
-  "prompt_move_down": "Move down"
+  "prompt_move_down": "Move down",
+  "prompt_is_template": "Template",
+  "prompt_is_template_hint": "Templates create a new chat with the prompt text ready to edit instead of sending immediately.",
+  "prompt_use_template": "Use template"
 }

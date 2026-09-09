@@ -282,6 +282,7 @@ export interface Prompt {
   attach_files: string[];
   skill_ids: string[];
   is_favorite: boolean;
+  is_template: boolean;
   launch_settings: PromptLaunchSettings;
   position: number;
   created_at: number;
@@ -712,6 +713,7 @@ export const promptCreate = (
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  isTemplate: boolean,
   launchSettings: PromptLaunchSettings,
 ) =>
   invoke<Prompt>("prompt_create", {
@@ -721,6 +723,7 @@ export const promptCreate = (
     attachFiles,
     skillIds,
     isFavorite,
+    isTemplate,
     launchSettings,
   });
 export const promptUpdate = (
@@ -731,6 +734,7 @@ export const promptUpdate = (
   attachFiles: string[],
   skillIds: string[],
   isFavorite: boolean,
+  isTemplate: boolean,
   launchSettings: PromptLaunchSettings,
 ) =>
   invoke<Prompt>("prompt_update", {
@@ -741,6 +745,7 @@ export const promptUpdate = (
     attachFiles,
     skillIds,
     isFavorite,
+    isTemplate,
     launchSettings,
   });
 export const promptDelete = (id: string) => invoke<void>("prompt_delete", { id });

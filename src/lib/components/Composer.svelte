@@ -15,6 +15,7 @@
   import { m } from "$lib/i18n";
   import { sendMessage, cancelTurn, currentChatId } from "$lib/stores/chat";
   import { skills as skillsStore } from "$lib/stores/skills";
+  import { pendingTemplatePayload } from "$lib/stores/prompts";
   import { attachmentAdd, attachmentRemove, attachmentReadDataUrl, type Attachment, type Skill } from "$lib/tauri";
   import { COMPOSER_SEND_EVENT, FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT, COMPOSER_INSERT_EVENT } from "$lib/events";
   import { formatSize } from "$lib/utils";
@@ -57,12 +58,33 @@
   }
 
   // Pending attachments belong to the chat they were added to; reset on chat switch.
+  // When a template prompt was "run", populate the composer with its text, skills,
+  // and attachment paths instead of sending immediately.
   $effect(() => {
-    if ($currentChatId) {
+    const chatId = $currentChatId;
+    if (chatId) {
       pending = [];
       thumbCache = {};
       selectedSkillIds = [];
       skillsOpen = false;
+    }
+    const payload = $pendingTemplatePayload;
+    if (payload && chatId) {
+      if (payload.chatId === chatId) {
+        text = payload.text;
+        selectedSkillIds = [...payload.skillIds];
+        if (payload.attachPaths.length > 0) {
+          void addPaths(payload.attachPaths);
+        }
+        void tick().then(() => {
+          textareaEl?.focus();
+          if (textareaEl) {
+            textareaEl.selectionStart = textareaEl.selectionEnd = textareaEl.value.length;
+          }
+          autoResize();
+        });
+      }
+      pendingTemplatePayload.set(null);
     }
   });
 

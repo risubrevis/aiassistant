@@ -740,5 +740,8 @@
   "prompt_run_failed": "Nie można uruchomić promptu",
   "prompt_standalone": "Samodzielny",
   "prompt_move_up": "Przenieś w górę",
-  "prompt_move_down": "Przenieś w dół"
+  "prompt_move_down": "Przenieś w dół",
+  "prompt_is_template": "Szablon",
+  "prompt_is_template_hint": "Szablony tworzą nowy czat z tekstem promptu gotowym do edycji, zamiast wysyłać go natychmiast.",
+  "prompt_use_template": "Użyj szablonu"
 }
