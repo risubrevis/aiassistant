@@ -754,6 +754,24 @@ export function applyMessageDone(e: ipc.MessageDoneEvent) {
   streamRetryByMessage.update((s) => { const n = { ...s }; delete n[e.message_id]; return n; });
 }
 
+export async function applyUserMessageId(chatId: string, messageId: string) {
+  messagesByChat.update((m) => {
+    const list = m[chatId] ?? [];
+    const idx = list.findIndex((x) => x.id.startsWith("local-") && x.role === "user");
+    if (idx < 0) return m;
+    const next = [...list];
+    next[idx] = { ...next[idx], id: messageId };
+    return { ...m, [chatId]: next };
+  });
+  // Refetch attachments so their message_id now matches the real backend id.
+  try {
+    const atts = await ipc.attachmentsForChat(chatId);
+    attachmentsByChat.update((m) => ({ ...m, [chatId]: atts }));
+  } catch (e) {
+    console.error("attachmentsForChat failed", e);
+  }
+}
+
 export function applyTurnError(e: ipc.TurnErrorEvent) {
   ensureAssistant(e.chat_id, e.message_id);
   turnErrorByMessage.update((m) => ({ ...m, [e.message_id]: { ...e } }));

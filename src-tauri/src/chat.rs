@@ -267,11 +267,13 @@ fn parse_blocks(content_parts: &Option<String>) -> Vec<serde_json::Value> {
 
 /// Multipart content built from the chat's persisted attachments, grouped by
 /// the user message each attachment is linked to. Images become base64 image
-/// parts; text-like files are inlined into a text part; other binaries get a
+/// parts (or, with vision routing, annotations pointing at the analyze_image
+/// tool); text-like files are inlined into a text part; other binaries get a
 /// short annotation so the model at least knows the file exists.
 async fn build_attachment_parts(
     pool: &SqlitePool,
     chat_id: &str,
+    vision_routing: bool,
 ) -> anyhow::Result<HashMap<String, Vec<ContentPart>>> {
     const MAX_TEXT_ATTACHMENT_BYTES: i64 = 262_144;
     let list = attachments::list_for_chat(pool, chat_id).await?;
@@ -286,11 +288,25 @@ async fn build_attachment_parts(
         };
         let slot = map.entry(message_id).or_default();
         if att.is_image {
-            let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            slot.push(ContentPart::Image {
-                media_type: att.mime_type.clone(),
-                data,
-            });
+            if vision_routing {
+                let dims = match (att.width, att.height) {
+                    (Some(w), Some(h)) => format!("{w}x{h}"),
+                    _ => "unknown size".to_string(),
+                };
+                slot.push(ContentPart::Text {
+                    text: format!(
+                        "[Attached image: {} ({}, {}). The image is not shown to you directly. \
+                        Use the analyze_image tool with attachment_id=\"{}\" and a prompt to inspect it.]",
+                        att.file_name, att.mime_type, dims, att.id
+                    ),
+                });
+            } else {
+                let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                slot.push(ContentPart::Image {
+                    media_type: att.mime_type.clone(),
+                    data,
+                });
+            }
         } else if is_text_mime(&att.mime_type) && att.file_size <= MAX_TEXT_ATTACHMENT_BYTES {
             let text = String::from_utf8_lossy(&bytes);
             slot.push(ContentPart::Text {
@@ -681,27 +697,56 @@ pub async fn generate_chat_title(
         models::list_active_branch(pool, &chat.id, rules::active_leaf(&chat.meta).as_deref())
             .await
             .ok()?;
-    let user_text = history
+    let user_msg = history.iter().find(|m| m.role == "user");
+    // Skip assistant iterations whose text content is empty (e.g. a tool-calling
+    // turn that only emitted thinking + tool_use blocks) and use the first one
+    // with an actual textual reply.
+    let assistant_text: String = history
         .iter()
-        .find(|m| m.role == "user")
+        .find(|m| m.role == "assistant" && !m.content.is_empty())
         .map(|m| m.content.as_str())
-        .unwrap_or("");
-    let assistant_text = history
-        .iter()
-        .find(|m| m.role == "assistant")
-        .map(|m| m.content.as_str())
-        .unwrap_or("");
-    if user_text.is_empty() || assistant_text.is_empty() {
+        .unwrap_or("")
+        .chars()
+        .take(1000)
+        .collect();
+    if assistant_text.is_empty() {
         return None;
     }
-    let user_text: String = user_text.chars().take(500).collect();
-    let assistant_text: String = assistant_text.chars().take(1000).collect();
+    // Build user-side context. For text-bearing messages use the content; for
+    // image-only messages (empty content) synthesize a caption from image
+    // attachments so the title model has user-side context.
+    let user_text: String = match user_msg {
+        Some(m) if !m.content.is_empty() => m.content.chars().take(500).collect(),
+        Some(m) => match crate::db::attachments::list_for_message(pool, &m.id).await {
+            Ok(atts) => {
+                let imgs: Vec<&crate::db::attachments::Attachment> =
+                    atts.iter().filter(|a| a.is_image).collect();
+                if imgs.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "User shared {} image(s){}",
+                        imgs.len(),
+                        imgs.first()
+                            .map(|a| format!(": {}", a.file_name))
+                            .unwrap_or_default()
+                    )
+                }
+            }
+            Err(_) => String::new(),
+        },
+        None => String::new(),
+    };
 
     let req = CompleteRequest {
         model,
         messages: vec![ChatMessage {
             role: "user".into(),
-            content: format!("User: {user_text}\n\nAssistant: {assistant_text}"),
+            content: if user_text.is_empty() {
+                format!("Assistant: {assistant_text}")
+            } else {
+                format!("User: {user_text}\n\nAssistant: {assistant_text}")
+            },
             tool_call_id: None,
             tool_calls: None,
             parts: None,
@@ -1123,6 +1168,11 @@ async fn start_turn(
                     warn!("failed to link attachments: {e:#}");
                 }
             }
+            // Let the frontend swap its optimistic local id for the real one.
+            let _ = app.emit(
+                "chat:user_message",
+                serde_json::json!({ "chat_id": chat_id, "message_id": user_id }),
+            );
             user_id
         }
         TurnKind::Regenerate => {
@@ -1310,7 +1360,10 @@ async fn run_turn(
         existing
     };
     // Multipart content from persisted attachments for this chat.
-    let attachment_parts = build_attachment_parts(&pool, &chat_id)
+    let vision_routing = mode != "minimal"
+        && cfg.defaults.vision_model_enabled
+        && cfg.defaults.vision_model.is_some();
+    let attachment_parts = build_attachment_parts(&pool, &chat_id, vision_routing)
         .await
         .unwrap_or_else(|e| {
             warn!("failed to load attachments for chat {chat_id}: {e}");
@@ -1446,6 +1499,13 @@ async fn run_turn(
         }
     }
 
+    if vision_routing {
+        system = Some(match system {
+            Some(s) => format!("{s}\n\nVision delegation: images (chat attachments and project files) are not sent to you directly. Use the analyze_image tool to inspect any image — pass attachment_id for chat attachments, or path for files within the project — plus a prompt. The dedicated vision model returns its analysis; use it to answer the user."),
+            None => "Vision delegation: images (chat attachments and project files) are not sent to you directly. Use the analyze_image tool to inspect any image — pass attachment_id for chat attachments, or path for files within the project — plus a prompt. The dedicated vision model returns its analysis; use it to answer the user.".to_string(),
+        });
+    }
+
     // Tools: builtins filtered by mode + in-project flag (docs/12, docs/08).
     // Cross-chat retrieval tools honor the project cross_chat setting ("off"):
     let cross_chat = project
@@ -1472,6 +1532,24 @@ async fn run_turn(
     if !project_skills.is_empty() {
         registry.register(Box::new(crate::tools::builtin::ConnectSkill::new(
             project_skills.clone(),
+        )));
+    }
+    if mode != "minimal"
+        && !cfg
+            .defaults
+            .disabled_tools
+            .iter()
+            .any(|d| d == "analyze_image")
+    {
+        let vision_ref = if vision_routing {
+            cfg.defaults.vision_model.clone()
+        } else {
+            None
+        };
+        registry.register(Box::new(crate::tools::builtin::AnalyzeImage::new(
+            vision_ref,
+            pcfg.clone(),
+            model.clone(),
         )));
     }
     let tools_json = if registry.names().is_empty() {
@@ -2172,7 +2250,8 @@ async fn run_turn(
             let title = match generate_chat_title(&pool2, &cfg, &chat, project.as_ref()).await {
                 Some(t) => t,
                 None => {
-                    // Fallback: first line of the first user message, truncated.
+                    // Fallback: first line of the first non-empty user message
+                    // (or the assistant response for image-only first turns), truncated.
                     let hist = match models::list_active_branch(
                         &pool2,
                         &chat_id2,
@@ -2187,6 +2266,12 @@ async fn run_turn(
                         .iter()
                         .find(|m| m.role == "user")
                         .map(|m| m.content.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| {
+                            hist.iter()
+                                .find(|m| m.role == "assistant" && !m.content.is_empty())
+                                .map(|m| m.content.as_str())
+                        })
                         .unwrap_or("");
                     let fallback: String = first_user
                         .lines()

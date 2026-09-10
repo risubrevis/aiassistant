@@ -2,6 +2,7 @@
   import {
     File as FileIcon,
     Image as ImageIcon,
+    ImageOff,
     Pencil,
   } from "@lucide/svelte";
   import type { UiMessage } from "$lib/stores/chat";
@@ -75,6 +76,11 @@
           {#each userAttachments as a (a.id)}
             {#if a.is_image && imgCache[a.id]}
               <img class="att-image" src={imgCache[a.id]} alt={a.file_name} title={a.file_name} />
+            {:else if a.is_image && a.id in imgCache}
+              <span class="att-missing" title={m.attachment_not_found()}>
+                <ImageOff size={14} />
+                <span class="att-missing-name">{a.file_name}</span>
+              </span>
             {:else}
               <span
                 class="att-chip"
@@ -138,10 +144,37 @@
   }
   .att-image {
     display: block;
-    max-width: 160px;
-    max-height: 120px;
+    width: 96px;
+    height: 96px;
+    object-fit: cover;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
+  }
+  .att-missing {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.2rem;
+    width: 96px;
+    height: 96px;
+    padding: 0.4rem;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    color: var(--muted-foreground);
+    font-size: 0.65rem;
+    line-height: 1.2;
+    text-align: center;
+  }
+  .att-missing :global(svg) {
+    flex-shrink: 0;
+  }
+  .att-missing-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
   }
   .att-chip {
     display: inline-flex;

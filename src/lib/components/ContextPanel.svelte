@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Folder, FilePlus, FileEdit, FileX, FileText, File, Trash2, Settings2, Plus, CornerDownLeft, Sparkles } from "@lucide/svelte";
+  import { Folder, FilePlus, FileEdit, FileX, FileText, File, Trash2, Settings2, Plus, CornerDownLeft, Sparkles, AlertTriangle } from "@lucide/svelte";
   import * as ipc from "$lib/tauri";
   import type { ProjectContextSummary, ProjectPath, Attachment, Chat } from "$lib/tauri";
   import {
@@ -40,6 +40,7 @@
   let attachments = $state<Attachment[]>([]);
   let thumbs = $state<Record<string, string>>({});
   let thumbRequested = new Set<string>();
+  let thumbFailed = $state<Set<string>>(new Set());
 
   async function loadPaths() {
     if (!projectId) return;
@@ -83,12 +84,11 @@
   });
 
   $effect(() => {
-    if (!standalone) return;
     void chatId;
     void loadAttachments();
   });
 
-  // Load image thumbnails once per attachment; failures are not retried.
+  // Load image thumbnails once per attachment; record failures for missing-file marking.
   $effect(() => {
     for (const a of attachments) {
       if (a.is_image && !thumbRequested.has(a.id)) {
@@ -96,7 +96,7 @@
         void ipc
           .attachmentReadDataUrl(a.id)
           .then((url) => (thumbs = { ...thumbs, [a.id]: url }))
-          .catch(() => {});
+          .catch(() => (thumbFailed = new Set(thumbFailed).add(a.id)));
       }
     }
   });
@@ -195,30 +195,7 @@
   </div>
 
   <div class="ctx-body">
-    {#if standalone}
-      <div class="ctx-section">
-        <div class="ctx-label"><span>{m.context_attachments()}</span></div>
-        {#if attachments.length === 0}
-          <div class="ctx-empty">{m.context_no_attachments()}</div>
-        {:else}
-          {#each attachments as a (a.id)}
-            <div class="path-row" title={a.file_name}>
-              {#if a.is_image && thumbs[a.id]}
-                <img class="thumb" src={thumbs[a.id]} alt={a.file_name} />
-              {:else}
-                <File size={12} />
-              {/if}
-              <span class="path">{a.file_name}</span>
-              <span class="size">{formatSize(a.file_size)}</span>
-              <button class="icon-btn del" title={m.common_delete()} onclick={() => removeAttachment(a)}>
-                <Trash2 size={12} />
-              </button>
-            </div>
-          {/each}
-        {/if}
-      </div>
-
-    {:else}
+    {#if !standalone}
       <div class="ctx-name">{projectName}</div>
 
       <div class="ctx-section">
@@ -298,6 +275,34 @@
         {/if}
       </div>
     {/if}
+
+    <div class="ctx-section">
+      <div class="ctx-label"><span>{m.context_attachments()}</span></div>
+      {#if attachments.length === 0}
+        <div class="ctx-empty">{m.context_no_attachments()}</div>
+      {:else}
+        {#each attachments as a (a.id)}
+          <div class="path-row" title={a.file_name}>
+            {#if a.is_image && thumbs[a.id]}
+              <img class="thumb" src={thumbs[a.id]} alt={a.file_name} />
+            {:else if a.is_image && thumbFailed.has(a.id)}
+              <span class="ctx-warn"><AlertTriangle size={12} /></span>
+            {:else}
+              <File size={12} />
+            {/if}
+            <span class="path">{a.file_name}</span>
+            {#if a.is_image && thumbFailed.has(a.id)}
+              <span class="ctx-not-found">{m.attachment_not_found()}</span>
+            {:else}
+              <span class="size">{formatSize(a.file_size)}</span>
+            {/if}
+            <button class="icon-btn del" title={m.common_delete()} onclick={() => removeAttachment(a)}>
+              <Trash2 size={12} />
+            </button>
+          </div>
+        {/each}
+      {/if}
+    </div>
   </div>
 </aside>
 
@@ -471,6 +476,16 @@
     flex-shrink: 0;
     font-size: 0.65rem;
     color: var(--muted-foreground);
+  }
+  .ctx-warn {
+    color: var(--destructive);
+    flex-shrink: 0;
+  }
+  .ctx-not-found {
+    color: var(--muted-foreground);
+    font-size: 0.7rem;
+    font-style: italic;
+    white-space: nowrap;
   }
   .icon-btn {
     display: inline-flex;

@@ -5,6 +5,7 @@
     setDefaultsModel,
     setMaxTurns,
     setRagEnabled,
+    setVisionModelEnabled,
     ragClearAll,
     ragStatus,
     onRagCleared,
@@ -25,13 +26,17 @@
   let primary = $state("");
   let secondary = $state("");
   let embedding = $state("");
+  let vision = $state("");
   let ragEnabled = $state(true);
+  let visionEnabled = $state(false);
   let activeModels = $state<ModelOption[]>([]);
   let allModels = $state<ModelOption[]>([]);
   let dirty = $state(false);
   let ragDirty = $state(false);
+  let visionDirty = $state(false);
   let saving = $state(false);
   let ragSaving = $state(false);
+  let visionSaving = $state(false);
   let totalChunks = $state(0);
   let maxTurns = $state(50);
   let mtDirty = $state(false);
@@ -41,6 +46,8 @@
   // edits without a refetch. Refreshed from config on every sync.
   let lastRagEnabled = $state(true);
   let lastEmbedding = $state("");
+  let lastVisionEnabled = $state(false);
+  let lastVision = $state("");
   let lastMaxTurns = $state(50);
 
   const NOT_SELECTED = "";
@@ -54,13 +61,18 @@
     primary = refValue(cfg.defaults.main_model);
     secondary = refValue(cfg.defaults.secondary_model);
     embedding = refValue(cfg.defaults.embedding_model);
+    vision = refValue(cfg.defaults.vision_model);
     ragEnabled = cfg.defaults.rag_enabled;
+    visionEnabled = cfg.defaults.vision_model_enabled;
     maxTurns = cfg.defaults.max_turns ?? 50;
     lastEmbedding = embedding;
     lastRagEnabled = ragEnabled;
+    lastVisionEnabled = visionEnabled;
+    lastVision = vision;
     lastMaxTurns = maxTurns;
     dirty = false;
     ragDirty = false;
+    visionDirty = false;
     mtDirty = false;
   }
 
@@ -153,6 +165,10 @@
     { value: NOT_SELECTED, label: m.settings_models_not_selected() },
     ...withCurrent(activeItems, embedding),
   ]);
+  const visionOptions = $derived<SelectItem[]>([
+    { value: NOT_SELECTED, label: m.settings_models_not_selected() },
+    ...withCurrent(activeItems, vision),
+  ]);
 
   function parseValue(v: string): { provider: string; model: string } | null {
     if (!v) return null;
@@ -223,6 +239,34 @@
       toast.error(m.settings_models_save_failed(), String(err));
     } finally {
       ragSaving = false;
+    }
+  }
+
+  function toggleVision() {
+    visionEnabled = !visionEnabled;
+    visionDirty = true;
+  }
+
+  function cancelVision() {
+    visionEnabled = lastVisionEnabled;
+    vision = lastVision;
+    visionDirty = false;
+  }
+
+  async function saveVision() {
+    // Capture before any await (see save() above for rationale).
+    const v = parseValue(vision);
+    const enabled = visionEnabled;
+    visionSaving = true;
+    try {
+      await setVisionModelEnabled(enabled);
+      await setDefaultsModel("vision_model", v?.provider ?? null, v?.model ?? null);
+      visionDirty = false;
+      toast.success(m.settings_models_saved());
+    } catch (err) {
+      toast.error(m.settings_models_save_failed(), String(err));
+    } finally {
+      visionSaving = false;
     }
   }
 
@@ -346,6 +390,45 @@
         </button>
       </div>
     </section>
+
+    <section class="block vision-section" class:disabled={!visionEnabled}>
+      <div class="rag-head">
+        <label class="rag-toggle">
+          <input type="checkbox" checked={visionEnabled} onchange={toggleVision} />
+          <span class="rag-toggle-label">{m.settings_models_vision_section()}</span>
+        </label>
+        <span class="rag-toggle-enabled">{m.settings_models_vision_enabled()}</span>
+      </div>
+
+      <div class="field">
+        <span class="label">{m.settings_models_vision_model()}</span>
+        <Select
+          class="w-full"
+          value={vision}
+          items={visionOptions}
+          placeholder={m.settings_models_not_selected()}
+          disabled={!visionEnabled}
+          title={visionEnabled ? undefined : m.settings_models_vision_disabled_hint()}
+          onchange={(v) => {
+            vision = v;
+            visionDirty = true;
+          }}
+        />
+      </div>
+
+      {#if !visionEnabled}
+        <p class="rag-hint">{m.settings_models_vision_disabled_hint()}</p>
+      {/if}
+
+      <div class="actions">
+        <button class="btn primary" onclick={saveVision} disabled={visionSaving || !visionDirty}>
+          {visionSaving ? "…" : m.common_save()}
+        </button>
+        <button class="btn ghost" onclick={cancelVision} disabled={visionSaving || !visionDirty}>
+          {m.common_cancel()}
+        </button>
+      </div>
+    </section>
   {/if}
 
   <section class="block max-turns-section">
@@ -431,6 +514,10 @@
     padding: 0.5rem 0;
   }
   .rag-section {
+    border-top: 1px solid var(--border);
+    padding-top: 0.75rem;
+  }
+  .vision-section {
     border-top: 1px solid var(--border);
     padding-top: 0.75rem;
   }

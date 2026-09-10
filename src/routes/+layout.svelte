@@ -27,6 +27,7 @@
     onChatPtyOutput,
     onChatPtyDone,
     onChatMessageDone,
+    onChatUserMessage,
     onChatTurnError,
     onChatStreamRetry,
     onCompacted,
@@ -274,6 +275,7 @@
     onChatPtyOutput((e) => chat.applyPtyOutput(e));
     onChatPtyDone((e) => chat.applyPtyDone(e));
     onChatMessageDone((e) => chat.applyMessageDone(e));
+    onChatUserMessage((e) => chat.applyUserMessageId(e.chat_id, e.message_id));
     onChatTurnError((e) => chat.applyTurnError(e));
     onChatStreamRetry((e) => chat.applyStreamRetry(e));
     onCompacted((s) => chat.applyCompacted(s));

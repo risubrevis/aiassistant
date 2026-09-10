@@ -59,6 +59,8 @@ export interface AppConfig {
     main_model: ModelRef | null;
     secondary_model: ModelRef | null;
     embedding_model: ModelRef | null;
+    vision_model_enabled: boolean;
+    vision_model: ModelRef | null;
     rag_enabled: boolean;
     system_prompt: string;
     auto_collapse_context_pct: number;
@@ -977,12 +979,14 @@ export const providersActiveModels = () =>
 export const providersAllModels = () =>
   invoke<ModelOption[]>("providers_all_models");
 export const setDefaultsModel = (
-  field: "main_model" | "secondary_model" | "embedding_model",
+  field: "main_model" | "secondary_model" | "embedding_model" | "vision_model",
   provider: string | null,
   model: string | null,
 ) => invoke<void>("set_defaults_model", { field, provider, model });
 export const setRagEnabled = (value: boolean) =>
   invoke<void>("set_rag_enabled", { value });
+export const setVisionModelEnabled = (value: boolean) =>
+  invoke<void>("set_vision_model_enabled", { value });
 
 export function onProvidersChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("providers:changed", () => cb());
@@ -1307,6 +1311,10 @@ export interface MessageDoneEvent {
   usage: Usage | null;
   finish_reason: string;
 }
+export interface UserMessageEvent {
+  chat_id: string;
+  message_id: string;
+}
 
 export function onConfigReloaded(cb: () => void): Promise<UnlistenFn> {
   return listen("config:reloaded", () => cb());
@@ -1336,6 +1344,9 @@ export function onChatApprovalRequest(
 }
 export function onChatMessageDone(cb: (e: MessageDoneEvent) => void): Promise<UnlistenFn> {
   return listen<MessageDoneEvent>("chat:message_done", (e) => cb(e.payload));
+}
+export function onChatUserMessage(cb: (e: UserMessageEvent) => void): Promise<UnlistenFn> {
+  return listen<UserMessageEvent>("chat:user_message", (e) => cb(e.payload));
 }
 export interface TurnErrorEvent {
   chat_id: string;

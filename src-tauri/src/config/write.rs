@@ -137,6 +137,13 @@ pub fn write_rag_enabled(value: bool) -> Result<()> {
     write_doc(doc)
 }
 
+/// Set `[defaults].vision_model_enabled` (route image analysis to a vision model).
+pub fn write_vision_model_enabled(value: bool) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["defaults"]["vision_model_enabled"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
 /// Set a string field under `[logging]` (level / file_level).
 pub fn write_logging_field(field: &str, value: &str) -> Result<()> {
     let mut doc = load_doc()?;

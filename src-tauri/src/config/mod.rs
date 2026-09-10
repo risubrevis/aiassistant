@@ -17,7 +17,7 @@ pub use write::{
     write_add_environment_info, write_auto_collapse_context_pct, write_auto_pull_changes,
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
     write_environment_info, write_logging_field, write_mode, write_network, write_rag_enabled,
-    write_system_prompt, write_web_search,
+    write_system_prompt, write_vision_model_enabled, write_web_search,
 };
 
 /// App config directory: `config_dir/aiassistant` per-OS (XDG/AppData/Library).
@@ -149,6 +149,8 @@ edit_toggle = "ask"         # ask | auto
 # main_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # secondary_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # embedding_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
+# vision_model_enabled = false   # route image analysis to a separate vision model (analyze_image tool)
+# vision_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # System prompt: system_prompt.md (same dir).
 auto_collapse_context_pct = 90
 max_turns = 50              # max LLM tool-call round-trips per turn (built-in agent loop); raise for long multi-step tasks

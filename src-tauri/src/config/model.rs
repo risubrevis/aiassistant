@@ -282,6 +282,15 @@ pub struct Defaults {
     pub secondary_model: Option<ModelRef>,
     #[serde(default)]
     pub embedding_model: Option<ModelRef>,
+    /// Route image analysis to a dedicated vision model via the `analyze_image`
+    /// tool. When enabled and a vision model is selected, attached/project images
+    /// are not sent to the main model directly — the main model delegates via the
+    /// tool instead.
+    #[serde(default)]
+    pub vision_model_enabled: bool,
+    /// Vision model used for image analysis when `vision_model_enabled` is true.
+    #[serde(default)]
+    pub vision_model: Option<ModelRef>,
     /// Master switch for retrieval-augmented generation (RAG): index chat
     /// attachments and project files, then inject relevant snippets into the
     /// system prompt. When false, no indexing or retrieval happens even if an
@@ -357,6 +366,8 @@ impl Default for Defaults {
             main_model: None,
             secondary_model: None,
             embedding_model: None,
+            vision_model_enabled: false,
+            vision_model: None,
             rag_enabled: true,
             system_prompt: default_system_prompt(),
             auto_collapse_context_pct: default_collapse_pct(),

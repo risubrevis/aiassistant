@@ -6,7 +6,9 @@ use serde_json::Value;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::config::ModelRef;
 use crate::projects::ProjectSkill;
+use crate::providers::{self, ChatMessage, CompleteEvent, CompleteRequest, ContentPart, Provider};
 
 use super::{validate_read_path, Tool, ToolCategory, ToolResult, ToolSpec};
 
@@ -2642,6 +2644,222 @@ impl Tool for ConnectSkill {
     }
     async fn execute(&self, _args: Value) -> ToolResult {
         ToolResult::err("connect_skill must be invoked in a chat turn")
+    }
+}
+
+/// Inspect an image and return a textual description. Delegates to a dedicated
+/// vision model when one is configured (`vision_ref`); otherwise uses the chat's
+/// main model. The model calls this with a file `path` (project image) or
+/// `attachment_id` (chat attachment) plus a `prompt`.
+pub struct AnalyzeImage {
+    vision_ref: Option<ModelRef>,
+    main_pcfg: crate::config::Provider,
+    main_model: String,
+}
+
+impl AnalyzeImage {
+    /// `vision_ref` — a dedicated vision model to delegate to (when configured).
+    /// Falls back to the turn's main model (`main_pcfg`/`main_model`) when `None`.
+    pub fn new(
+        vision_ref: Option<ModelRef>,
+        main_pcfg: crate::config::Provider,
+        main_model: String,
+    ) -> Self {
+        Self {
+            vision_ref,
+            main_pcfg,
+            main_model,
+        }
+    }
+
+    fn mime_for_ext(ext: &str) -> &'static str {
+        match ext.to_lowercase().as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "bmp" => "image/bmp",
+            _ => "application/octet-stream",
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for AnalyzeImage {
+    fn category(&self) -> ToolCategory {
+        ToolCategory::Readonly
+    }
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "analyze_image".into(),
+            description: "Analyze an image using a vision-capable model and return its textual \
+            description. Use this to inspect images you cannot see directly (e.g. image files in \
+            the project, or chat attachments when the main model cannot view them inline). Pass \
+            either `path` (a file path within the project/attached directory) or `attachment_id` \
+            (for a chat-attached image), plus an optional `prompt` describing what to look for. \
+            Exactly one of `path` / `attachment_id` must be provided."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to an image file within the project or attached directory" },
+                    "attachment_id": { "type": "string", "description": "ID of a chat-attached image (shown in the attachment annotation)" },
+                    "prompt": { "type": "string", "description": "What to ask about the image (defaults to a general description)" }
+                }
+            }),
+        }
+    }
+    async fn execute(&self, args: Value) -> ToolResult {
+        let path = arg_str(&args, "path");
+        let attachment_id = arg_str(&args, "attachment_id");
+        let prompt = arg_str(&args, "prompt")
+            .unwrap_or("Describe this image in detail.")
+            .to_string();
+
+        // Resolve image bytes + mime type from exactly one source.
+        let (media_type, data) = match (path, attachment_id) {
+            (Some(p), None) => {
+                let abs = match validate_read_path(p) {
+                    Ok(a) => a,
+                    Err(e) => return ToolResult::err(e),
+                };
+                let bytes = match tokio::fs::read(&abs).await {
+                    Ok(b) => b,
+                    Err(e) => return ToolResult::err(format!("read failed: {e}")),
+                };
+                let ext = abs.extension().and_then(|e| e.to_str()).unwrap_or("");
+                let mime = Self::mime_for_ext(ext).to_string();
+                if !mime.starts_with("image/") {
+                    return ToolResult::err(format!("file does not look like an image ({mime})"));
+                }
+                (mime, bytes)
+            }
+            (None, Some(id)) => {
+                let Some(pool) = super::db_pool() else {
+                    return ToolResult::err("database unavailable");
+                };
+                let att = match crate::db::attachments::get(pool, id).await {
+                    Ok(Some(a)) => a,
+                    Ok(None) => return ToolResult::err(format!("attachment not found: {id}")),
+                    Err(e) => return ToolResult::err(format!("attachment lookup failed: {e}")),
+                };
+                if !att.is_image {
+                    return ToolResult::err(format!(
+                        "attachment is not an image: {}",
+                        att.file_name
+                    ));
+                }
+                let bytes = match tokio::fs::read(&att.storage_path).await {
+                    Ok(b) => b,
+                    Err(e) => return ToolResult::err(format!("read failed: {e}")),
+                };
+                (att.mime_type, bytes)
+            }
+            (Some(_), Some(_)) => {
+                return ToolResult::err("provide either `path` or `attachment_id`, not both");
+            }
+            (None, None) => {
+                return ToolResult::err("missing `path` or `attachment_id`");
+            }
+        };
+
+        const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+        if data.len() > MAX_IMAGE_BYTES {
+            return ToolResult::err(format!(
+                "image too large ({} bytes); limit is 20MB",
+                data.len()
+            ));
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+
+        // Resolve the target provider/model: the dedicated vision model when
+        // configured, otherwise the turn's main model.
+        let (pcfg, model) = match &self.vision_ref {
+            Some(vref) => {
+                let Some(pool) = super::db_pool() else {
+                    return ToolResult::err("database unavailable");
+                };
+                let pcfg =
+                    match crate::db::providers::get_provider(pool, &vref.provider).await {
+                        Ok(Some(r)) => r.to_config_provider(),
+                        _ => return ToolResult::err(
+                            "vision model provider not found (reconfigure in Settings → Models)",
+                        ),
+                    };
+                let model = match crate::db::providers::get_model(pool, &vref.model).await {
+                    Ok(Some(m)) => m.name,
+                    _ => {
+                        return ToolResult::err(
+                            "vision model not found (reconfigure in Settings → Models)",
+                        )
+                    }
+                };
+                (pcfg, model)
+            }
+            None => (self.main_pcfg.clone(), self.main_model.clone()),
+        };
+        if providers::build(&pcfg).is_none() {
+            return ToolResult::err(format!("provider kind '{}' not supported", pcfg.kind));
+        }
+
+        let req = CompleteRequest {
+            model,
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: String::new(),
+                tool_call_id: None,
+                tool_calls: None,
+                parts: Some(vec![
+                    ContentPart::Text { text: prompt },
+                    ContentPart::Image { media_type, data: encoded },
+                ]),
+            }],
+            system: Some(
+                "You are a vision analysis assistant. Examine the provided image and answer the \
+                request concisely and accurately. Report only what you can determine from the image."
+                    .to_string(),
+            ),
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            thinking: None,
+            thinking_effort: None,
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<CompleteEvent>(64);
+        let provider: Box<dyn Provider + Send> =
+            providers::build(&pcfg).expect("provider build checked above");
+        let err_slot = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let err_slot_tx = err_slot.clone();
+        let stream_task = tauri::async_runtime::spawn(async move {
+            if let Err(e) = provider.stream_complete(req, tx).await {
+                let msg = format!("{e}");
+                tracing::error!("image analyze stream error: {msg}");
+                if let Ok(mut g) = err_slot_tx.lock() {
+                    *g = Some(msg);
+                }
+            }
+        });
+        let mut text = String::new();
+        while let Some(ev) = rx.recv().await {
+            if let CompleteEvent::BlockDelta { text: Some(t), .. } = ev {
+                text.push_str(&t);
+            }
+        }
+        let _ = stream_task.await;
+
+        let text = text.trim();
+        if text.is_empty() {
+            let stream_err = err_slot.lock().ok().and_then(|mut g| g.take());
+            return ToolResult::err(match stream_err {
+                Some(e) => format!(
+                    "image analysis failed: {e}. If the main model does not support vision, \
+                    enable a separate vision model in Settings → Models."
+                ),
+                None => "image analysis returned an empty response".to_string(),
+            });
+        }
+        ToolResult::ok(text.to_string())
     }
 }
 
