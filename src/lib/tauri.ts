@@ -576,6 +576,8 @@ export const chatSetCommandToggle = (chatId: string, value: string) =>
   invoke<void>("chat_set_command_toggle", { chatId, value });
 export const chatSetEditToggle = (chatId: string, value: string) =>
   invoke<void>("chat_set_edit_toggle", { chatId, value });
+export const chatSetRightPanel = (chatId: string, open: boolean, mode: string, width: number) =>
+  invoke<void>("chat_set_right_panel", { chatId, open, mode, width });
 export const chatSend = (
   chatId: string,
   text: string,

@@ -746,5 +746,16 @@
   "prompt_use_template": "Použít šablonu",
   "prompts_filter_all": "Všechny prompty",
   "prompts_filter_standalone": "Samostatné chaty",
-  "prompts_filter_empty": "Žádné prompty neodpovídají tomuto filtru."
+  "prompts_filter_empty": "Žádné prompty neodpovídají tomuto filtru.",
+  "terminal_title": "Terminál",
+  "terminal_toggle": "Zobrazit/skrýt panel terminálu",
+  "terminal_export": "Exportovat historii terminálu",
+  "terminal_exporting": "Exportuje se…",
+  "terminal_export_done": "Historie terminálu byla exportována",
+  "terminal_input_placeholder": "Napište a stiskněte Enter pro odeslání do terminálu…",
+  "terminal_shell_exited": "Shell se ukončil (kód {code})",
+  "terminal_new_shell": "Nový shell",
+  "terminal_agent_cmd": "Příkaz agenta",
+  "terminal_exit_code": "kód {code}",
+  "terminal_needs_input": "Čeká se na váš vstup…"
 }

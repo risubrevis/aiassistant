@@ -746,5 +746,16 @@
   "prompt_use_template": "Использовать шаблон",
   "prompts_filter_all": "Все промпты",
   "prompts_filter_standalone": "Отдельные чаты",
-  "prompts_filter_empty": "Ни один промпт не соответствует этому фильтру."
+  "prompts_filter_empty": "Ни один промпт не соответствует этому фильтру.",
+  "terminal_title": "Терминал",
+  "terminal_toggle": "Показать/скрыть панель терминала",
+  "terminal_export": "Экспортировать историю терминала",
+  "terminal_exporting": "Экспорт…",
+  "terminal_export_done": "История терминала экспортирована",
+  "terminal_input_placeholder": "Введите текст и нажмите Enter, чтобы отправить в терминал…",
+  "terminal_shell_exited": "Оболочка завершилась (код {code})",
+  "terminal_new_shell": "Новая оболочка",
+  "terminal_agent_cmd": "Команда агента",
+  "terminal_exit_code": "код {code}",
+  "terminal_needs_input": "Ожидается ваш ввод…"
 }

@@ -746,5 +746,16 @@
   "prompt_use_template": "Use template",
   "prompts_filter_all": "All prompts",
   "prompts_filter_standalone": "Standalone chats",
-  "prompts_filter_empty": "No prompts match this filter."
+  "prompts_filter_empty": "No prompts match this filter.",
+  "terminal_title": "Terminal",
+  "terminal_toggle": "Toggle terminal panel",
+  "terminal_export": "Export terminal history",
+  "terminal_exporting": "Exporting…",
+  "terminal_export_done": "Terminal history exported",
+  "terminal_input_placeholder": "Type and press Enter to send to terminal…",
+  "terminal_shell_exited": "Shell exited (code {code})",
+  "terminal_new_shell": "New shell",
+  "terminal_agent_cmd": "Agent command",
+  "terminal_exit_code": "exit {code}",
+  "terminal_needs_input": "Waiting for your input…"
 }

@@ -141,8 +141,41 @@ export async function openChat(id: string) {
   if (!loaded.has(id)) {
     try {
       const msgs = await ipc.chatMessages(id);
-      // Tool-role messages are rendered inline as tool-call cards; hide them as bubbles.
-      messagesByChat.update((m) => ({ ...m, [id]: msgs.filter((x) => x.role !== "tool").map(toUi) }));
+      // Tool results live in separate role:"tool" messages; persisted assistant
+      // tool_use blocks have no result. Join them by tool_call_id so tool-call
+      // cards (and the terminal panel) can show past command output. Tool-role
+      // messages themselves are hidden as bubbles (rendered inline as cards).
+      const toolResults = new Map<string, { result: string; is_error: boolean }>();
+      for (const tm of msgs) {
+        if (tm.role !== "tool" || typeof tm.content !== "string") continue;
+        let callId: string | undefined;
+        let isError = false;
+        if (typeof tm.content_parts === "string" && tm.content_parts.length > 0) {
+          try {
+            const p = JSON.parse(tm.content_parts);
+            callId = typeof p?.tool_call_id === "string" ? p.tool_call_id : undefined;
+            isError = Boolean(p?.is_error);
+          } catch {
+            // malformed content_parts — skip
+          }
+        }
+        if (callId) toolResults.set(callId, { result: tm.content, is_error: isError });
+      }
+      const uiMsgs = msgs
+        .filter((x) => x.role !== "tool")
+        .map((m) => {
+          const u = toUi(m);
+          if (toolResults.size && u.blocks.some((b) => b.type === "tool_use" && b.tool_call_id)) {
+            u.blocks = u.blocks.map((b) => {
+              if (b.type !== "tool_use" || !b.tool_call_id) return b;
+              const r = toolResults.get(b.tool_call_id);
+              if (!r) return b;
+              return { ...b, result: r.result, is_error: r.is_error, status: r.is_error ? "error" : "done" };
+            });
+          }
+          return u;
+        });
+      messagesByChat.update((m) => ({ ...m, [id]: uiMsgs }));
       loaded.add(id);
     } catch (e) {
       console.error("chatMessages failed", e);
@@ -351,6 +384,42 @@ export async function setChatEditToggle(id: string, value: string) {
     );
   } catch (e) {
     console.error("chatSetEditToggle failed", e);
+  }
+}
+
+export interface RightPanelState {
+  open: boolean;
+  mode: "context" | "terminal";
+  width: number;
+}
+
+export function chatRightPanel(chat: Chat, defaultWidth: number): RightPanelState {
+  try {
+    const s = chat.settings ? (JSON.parse(chat.settings) as Record<string, string>) : null;
+    const rp = s?.right_panel ? (JSON.parse(s.right_panel) as Partial<RightPanelState>) : null;
+    return {
+      open: rp?.open ?? true,
+      mode: rp?.mode === "terminal" ? "terminal" : "context",
+      width: typeof rp?.width === "number" ? rp.width : defaultWidth,
+    };
+  } catch {
+    return { open: true, mode: "context", width: defaultWidth };
+  }
+}
+
+export async function setChatRightPanel(id: string, open: boolean, mode: string, width: number) {
+  try {
+    await ipc.chatSetRightPanel(id, open, mode, width);
+    const value = JSON.stringify({ open, mode, width });
+    chats.update((list) =>
+      list.map((c) =>
+        c.id === id
+          ? { ...c, settings: mergeSetting(c.settings, "right_panel", value) }
+          : c,
+      ),
+    );
+  } catch (e) {
+    console.error("chatSetRightPanel failed", e);
   }
 }
 

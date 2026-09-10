@@ -746,5 +746,16 @@
   "prompt_use_template": "Використати шаблон",
   "prompts_filter_all": "Усі промпти",
   "prompts_filter_standalone": "Окремі чати",
-  "prompts_filter_empty": "Жоден промпт не відповідає цьому фільтру."
+  "prompts_filter_empty": "Жоден промпт не відповідає цьому фільтру.",
+  "terminal_title": "Термінал",
+  "terminal_toggle": "Показати/приховати панель терміналу",
+  "terminal_export": "Експортувати історію терміналу",
+  "terminal_exporting": "Експорт…",
+  "terminal_export_done": "Історію терміналу експортовано",
+  "terminal_input_placeholder": "Введіть текст і натисніть Enter, щоб надіслати в термінал…",
+  "terminal_shell_exited": "Оболонку завершено (код {code})",
+  "terminal_new_shell": "Нова оболонка",
+  "terminal_agent_cmd": "Команда агента",
+  "terminal_exit_code": "код {code}",
+  "terminal_needs_input": "Очікується ваш ввід…"
 }

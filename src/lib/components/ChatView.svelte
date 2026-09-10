@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
+  import { get } from "svelte/store";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking, setChatMode, setChatCommandToggle, setChatEditToggle } from "$lib/stores/chat";
+  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking, setChatMode, setChatCommandToggle, setChatEditToggle, chatRightPanel, setChatRightPanel } from "$lib/stores/chat";
   import type { UiMessage } from "$lib/stores/chat";
   import { config as configStore } from "$lib/stores/config";
   import { projects } from "$lib/stores/project";
@@ -9,13 +10,14 @@
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
-  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X } from "@lucide/svelte";
+  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X, TerminalSquare } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
   import AssistantTurn from "./AssistantTurn.svelte";
   import Composer from "./Composer.svelte";
   import InteractionOverlay from "./InteractionOverlay.svelte";
   import ContextPanel from "./ContextPanel.svelte";
+  import TerminalPanel from "./TerminalPanel.svelte";
   import AgentPanel from "./AgentPanel.svelte";
   import AgentRunModal from "./AgentRunModal.svelte";
   import AgentInfoModal from "./AgentInfoModal.svelte";
@@ -31,7 +33,8 @@
   } from "$lib/stores/agents";
   import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT } from "$lib/events";
   import { tasksByChat, tasksModalChatId, openTasksModal, closeTasksModal, taskCounts } from "$lib/stores/tasks";
-  import { rightSidebarOpenProject, setRightSidebarOpenProject, saveRightSidebarOpenProject, rightSidebarOpenStandalone, setRightSidebarOpenStandalone, saveRightSidebarOpenStandalone } from "$lib/stores/layout";
+  import { DEFAULT_RIGHT, clampRight } from "$lib/stores/layout";
+  import { termStatusByChat, reconstructFromMessages } from "$lib/stores/terminal";
 
   let { chat }: { chat: Chat } = $props();
 
@@ -138,8 +141,17 @@
   let commandToggle = $derived(chatSetting("command_toggle", $configStore?.defaults.command_toggle ?? "manual"));
   let editToggle = $derived(chatSetting("edit_toggle", $configStore?.defaults.edit_toggle ?? "ask"));
   let project = $derived($projects.find((p) => p.id === chat.project_id) ?? null);
-  let rightSidebarOpen = $derived(project ? $rightSidebarOpenProject : $rightSidebarOpenStandalone);
+  let termStatus = $derived($termStatusByChat[chat.id] ?? "idle");
+  let rp = $derived(chatRightPanel(chat, DEFAULT_RIGHT));
   let counts = $derived(taskCounts($tasksByChat[chat.id] ?? []));
+
+  // Rebuild terminal entries from persisted history. Depends only on the chat id and
+  // the messages length, not on every streaming text delta; the array is read untracked.
+  $effect(() => {
+    void chat.id;
+    const len = $messagesByChat[chat.id]?.length ?? 0;
+    if (len > 0) reconstructFromMessages(chat.id, get(messagesByChat)[chat.id] ?? []);
+  });
   let ctxSummary = $state<ProjectContextSummary | null>(null);
   $effect(() => {
     const pid = chat.project_id;
@@ -364,11 +376,18 @@
         <Info size={15} />
       </button>
       <button
-        class="export-btn"
-        title={rightSidebarOpen ? m.context_toggle_collapse() : m.context_toggle_expand()}
-        onclick={() => { const v = !rightSidebarOpen; if (project) { setRightSidebarOpenProject(v); saveRightSidebarOpenProject(v); } else { setRightSidebarOpenStandalone(v); saveRightSidebarOpenStandalone(v); } }}
+        class="export-btn term-btn term-{termStatus}"
+        title={m.terminal_toggle()}
+        onclick={() => { const v = !(rp.open && rp.mode === "terminal"); void setChatRightPanel(chat.id, v, "terminal", rp.width); }}
       >
-        {#if rightSidebarOpen}<PanelRightOpen size={15} />{:else}<PanelRight size={15} />{/if}
+        <TerminalSquare size={15} />
+      </button>
+      <button
+        class="export-btn"
+        title={rp.open && rp.mode === "context" ? m.context_toggle_collapse() : m.context_toggle_expand()}
+        onclick={() => { const v = !(rp.open && rp.mode === "context"); void setChatRightPanel(chat.id, v, "context", rp.width); }}
+      >
+        {#if rp.open && rp.mode === "context"}<PanelRightOpen size={15} />{:else}<PanelRight size={15} />{/if}
       </button>
     </header>
 
@@ -492,11 +511,15 @@
     {/if}
   </div>
 
-  {#if rightSidebarOpen}
-    {#if project}
-      <ContextPanel projectId={project.id} projectName={project.name} chatId={chat.id} />
+  {#if rp.open}
+    {#if rp.mode === "terminal"}
+      <TerminalPanel {chat} />
     {:else}
-      <ContextPanel chatId={chat.id} />
+      {#if project}
+        <ContextPanel projectId={project.id} projectName={project.name} chatId={chat.id} chat={chat} />
+      {:else}
+        <ContextPanel chatId={chat.id} chat={chat} />
+      {/if}
     {/if}
   {/if}
 

@@ -567,6 +567,28 @@ async fn chat_set_edit_toggle(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn chat_set_right_panel(
+    chat_id: String,
+    open: bool,
+    mode: String,
+    width: f64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !matches!(mode.as_str(), "context" | "terminal") {
+        return Err("invalid right_panel mode".into());
+    }
+    let value = serde_json::to_string(&serde_json::json!({
+        "open": open,
+        "mode": mode,
+        "width": width
+    }))
+    .map_err(|e| e.to_string())?;
+    db::models::set_chat_setting(&state.pool, &chat_id, "right_panel", &value, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[derive(serde::Serialize)]
 struct ThinkingInfo {
     supports: bool,
@@ -3487,6 +3509,7 @@ pub fn run() {
             chat_set_mode,
             chat_set_command_toggle,
             chat_set_edit_toggle,
+            chat_set_right_panel,
             chat_thinking_info,
             chat_set_project,
             chat_set_system_prompt,

@@ -230,3 +230,15 @@
 *[data-tauri-drag-region] {
   app-region: drag;
 }
+/* Terminal panel button status pulse */
+.term-btn.term-running { color: hsl(217 91% 60%); animation: term-pulse-bv 1.8s ease-in-out infinite; }
+.term-btn.term-needs_input { animation: term-pulse-yr 0.6s ease-in-out infinite; }
+.term-btn.term-idle { color: var(--muted-foreground); }
+@keyframes term-pulse-bv {
+  0%, 100% { color: hsl(217 91% 60%); }
+  50% { color: hsl(265 80% 65%); }
+}
+@keyframes term-pulse-yr {
+  0%, 100% { color: hsl(45 95% 55%); }
+  50% { color: hsl(0 80% 60%); }
+}

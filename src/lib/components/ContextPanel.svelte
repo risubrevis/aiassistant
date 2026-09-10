@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { Folder, FilePlus, FileEdit, FileX, FileText, File, Trash2, Settings2, Plus, CornerDownLeft, Sparkles } from "@lucide/svelte";
   import * as ipc from "$lib/tauri";
-  import type { ProjectContextSummary, ProjectPath, Attachment } from "$lib/tauri";
+  import type { ProjectContextSummary, ProjectPath, Attachment, Chat } from "$lib/tauri";
   import {
     fileChanges,
     changedFileViews,
@@ -11,7 +11,8 @@
     insertAllFileRefs,
     openProjectSettings,
   } from "$lib/stores/project";
-  import { rightSidebarWidthProject, setRightSidebarWidthProject, saveRightSidebarWidthProject, rightSidebarWidthStandalone, setRightSidebarWidthStandalone, saveRightSidebarWidthStandalone } from "$lib/stores/layout";
+  import { chatRightPanel, setChatRightPanel } from "$lib/stores/chat";
+  import { DEFAULT_RIGHT, clampRight } from "$lib/stores/layout";
   import { formatSize } from "$lib/utils";
   import { m } from "$lib/i18n";
 
@@ -19,10 +20,18 @@
     projectId,
     projectName,
     chatId,
-  }: { projectId?: string; projectName?: string; chatId?: string } = $props();
+    chat,
+  }: { projectId?: string; projectName?: string; chatId?: string; chat: Chat } = $props();
 
   let standalone = $derived(!projectId);
-  let rightSidebarWidth = $derived(standalone ? $rightSidebarWidthStandalone : $rightSidebarWidthProject);
+  let rp = $derived(chatRightPanel(chat, DEFAULT_RIGHT));
+  let width = $state(DEFAULT_RIGHT);
+
+  $effect(() => {
+    void chat.id;
+    void chat.settings;
+    width = clampRight(chatRightPanel(chat, DEFAULT_RIGHT).width);
+  });
 
   let paths = $state<ProjectPath[]>([]);
   let views = $derived(projectId ? ($changedFileViews[projectId] ?? []) : []);
@@ -153,17 +162,17 @@
   function onResizeMove(e: PointerEvent) {
     if (!resizing || !asideEl) return;
     const rect = asideEl.getBoundingClientRect();
-    standalone ? setRightSidebarWidthStandalone(rect.right - e.clientX) : setRightSidebarWidthProject(rect.right - e.clientX);
+    width = clampRight(rect.right - e.clientX);
   }
   function onResizeUp(e: PointerEvent) {
     if (!resizing) return;
     resizing = false;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
-    standalone ? saveRightSidebarWidthStandalone($rightSidebarWidthStandalone) : saveRightSidebarWidthProject($rightSidebarWidthProject);
+    void setChatRightPanel(chat.id, rp.open, rp.mode, width);
   }
 </script>
 
-<aside class="ctx" bind:this={asideEl} style="width:{rightSidebarWidth}px">
+<aside class="ctx" bind:this={asideEl} style="width:{width}px">
   <div
     class="resize-handle"
     class:active={resizing}

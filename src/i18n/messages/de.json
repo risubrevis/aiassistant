@@ -746,5 +746,16 @@
   "prompt_use_template": "Vorlage verwenden",
   "prompts_filter_all": "Alle Prompts",
   "prompts_filter_standalone": "Eigenständige Chats",
-  "prompts_filter_empty": "Keine Prompts entsprechen diesem Filter."
+  "prompts_filter_empty": "Keine Prompts entsprechen diesem Filter.",
+  "terminal_title": "Terminal",
+  "terminal_toggle": "Terminal-Panel ein-/ausblenden",
+  "terminal_export": "Terminalverlauf exportieren",
+  "terminal_exporting": "Wird exportiert…",
+  "terminal_export_done": "Terminalverlauf exportiert",
+  "terminal_input_placeholder": "Eingeben und Enter drücken, um an das Terminal zu senden…",
+  "terminal_shell_exited": "Shell beendet (Code {code})",
+  "terminal_new_shell": "Neue Shell",
+  "terminal_agent_cmd": "Agent-Befehl",
+  "terminal_exit_code": "Code {code}",
+  "terminal_needs_input": "Wartet auf deine Eingabe…"
 }
