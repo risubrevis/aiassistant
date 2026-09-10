@@ -200,10 +200,25 @@ pub fn gate(
                 }
             }
         }
-        ToolCategory::Network => Decision::Ask {
-            summary: name.to_string(),
-            preview: None,
-        },
+        ToolCategory::Network => {
+            // The tool name is already shown as the card header; the summary
+            // carries the concrete target (search query / fetched URL) so the
+            // approval card reads e.g. "web_search\nlatest rust async news"
+            // instead of "web_search\nweb_search".
+            let detail = match name {
+                "web_search" => arg_str(args, "query"),
+                "web_fetch" => arg_str(args, "url"),
+                _ => None,
+            };
+            let summary = match detail {
+                Some(d) if !d.is_empty() => d,
+                _ => name.to_string(),
+            };
+            Decision::Ask {
+                summary,
+                preview: None,
+            }
+        }
     }
 }
 
@@ -401,5 +416,60 @@ mod tests {
             ),
             Decision::Deny(_)
         ));
+    }
+
+    #[test]
+    fn network_summary_carries_query_and_url() {
+        let p = perms();
+        // web_search -> summary is the query, not the tool name.
+        let d = gate(
+            ToolCategory::Network,
+            "web_search",
+            &json!({"query": "latest rust async news"}),
+            "write",
+            "auto",
+            "auto",
+            &p,
+        );
+        match d {
+            Decision::Ask { summary, .. } => {
+                assert_eq!(summary, "latest rust async news");
+            }
+            other => panic!("expected Ask, got {other:?}"),
+        }
+
+        // web_fetch -> summary is the URL, not the tool name.
+        let d = gate(
+            ToolCategory::Network,
+            "web_fetch",
+            &json!({"url": "https://example.com/page"}),
+            "write",
+            "auto",
+            "auto",
+            &p,
+        );
+        match d {
+            Decision::Ask { summary, .. } => {
+                assert_eq!(summary, "https://example.com/page");
+            }
+            other => panic!("expected Ask, got {other:?}"),
+        }
+
+        // unknown network tool without detail -> falls back to the tool name.
+        let d = gate(
+            ToolCategory::Network,
+            "some_net_tool",
+            &json!({}),
+            "write",
+            "auto",
+            "auto",
+            &p,
+        );
+        match d {
+            Decision::Ask { summary, .. } => {
+                assert_eq!(summary, "some_net_tool");
+            }
+            other => panic!("expected Ask, got {other:?}"),
+        }
     }
 }

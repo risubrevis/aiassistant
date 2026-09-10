@@ -1944,7 +1944,17 @@ async fn run_turn(
                                 )
                             }
                             None => {
-                                if let Some(hook_name) = args.get("name").and_then(|v| v.as_str()) {
+                                if tc.name == "web_fetch" {
+                                    // URL rendered in the monospace `.path` slot;
+                                    // clear the summary so it isn't shown twice.
+                                    if let Some(url) = args.get("url").and_then(|v| v.as_str()) {
+                                        (String::new(), Some(url.to_string()), None, false)
+                                    } else {
+                                        (summary, None, None, false)
+                                    }
+                                } else if let Some(hook_name) =
+                                    args.get("name").and_then(|v| v.as_str())
+                                {
                                     let enriched = match tc.name.as_str() {
                                         "web_hook_add" => {
                                             format!("create web hook '{hook_name}'")
