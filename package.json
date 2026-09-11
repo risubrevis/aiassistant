@@ -1,6 +1,6 @@
 {
   "name": "aiassistant",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Provider-agnostic desktop app for chatting with LLMs and working on code projects.",
   "type": "module",
   "scripts": {

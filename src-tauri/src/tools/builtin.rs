@@ -2609,7 +2609,7 @@ impl Tool for ConnectSkill {
     }
     fn spec(&self) -> ToolSpec {
         let mut desc = String::from(
-            "Load a project skill from the project's .agents/skills folder. Call this with a skill_id to retrieve the skill's full instructions, then follow them. Available skills:",
+            "Load a project skill from the project's .agents/skills folder. Call this with a skill_id to retrieve the skill's full instructions, then follow them. This tool can be called multiple times — load every skill that matches the request. If a loaded skill references another skill by id or name, call connect_skill for that skill too. Available skills:",
         );
         if self.skills.is_empty() {
             desc.push_str(" (none)");

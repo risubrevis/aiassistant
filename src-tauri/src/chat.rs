@@ -1417,7 +1417,7 @@ async fn run_turn(
             lines.push(format!("- {}: {}", s.id, s.description));
         }
         lines.push(
-            "Call the connect_skill tool with a skill_id to load a skill's full instructions when a request matches a skill. Supporting files in a skill's directory can be read with read_file using the dir path returned by connect_skill."
+            "Before starting work, evaluate the user's request against ALL skills listed above. Call the connect_skill tool for EVERY skill whose description matches the request — you can and should call it multiple times. If a skill you loaded references another skill by id or name (e.g. 'see skill boe-post'), you MUST call connect_skill for that referenced skill as well. Always load all relevant skills before beginning any work. Supporting files in a skill's directory can be read with read_file using the dir path returned by connect_skill."
                 .to_string(),
         );
         let section = lines.join("\n");
@@ -2524,13 +2524,29 @@ async fn execute_ctx_tool(
             let Some(skill) = ctx.project_skills.iter().find(|s| s.id == skill_id) else {
                 return crate::tools::ToolResult::err(format!("skill not found: {skill_id}"));
             };
-            crate::tools::ToolResult::ok(format!(
+            let mut output = format!(
                 "<skill id=\"{}\" title=\"{}\" dir=\"{}\">\n{}\n</skill>",
                 skill.id,
                 skill.title,
                 skill.dir.display(),
                 skill.body
-            ))
+            );
+            // Detect cross-references to other available skills and nudge the
+            // model to load them. Umbrella skills often delegate per-source
+            // methodology to individual sub-skills via inline references.
+            let referenced: Vec<&str> = ctx
+                .project_skills
+                .iter()
+                .filter(|s| s.id != skill.id && skill.body.contains(s.id.as_str()))
+                .map(|s| s.id.as_str())
+                .collect();
+            if !referenced.is_empty() {
+                output.push_str(&format!(
+                    "\n\nThis skill references the following skills. Call connect_skill for each of them to load their full instructions: {}",
+                    referenced.join(", ")
+                ));
+            }
+            crate::tools::ToolResult::ok(output)
         }
         "memory" => {
             let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("");

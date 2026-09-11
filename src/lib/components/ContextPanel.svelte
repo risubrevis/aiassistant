@@ -11,7 +11,7 @@
     insertAllFileRefs,
     openProjectSettings,
   } from "$lib/stores/project";
-  import { chatRightPanel, setChatRightPanel } from "$lib/stores/chat";
+  import { chatRightPanel, setChatRightPanel, messagesByChat } from "$lib/stores/chat";
   import { DEFAULT_RIGHT, clampRight } from "$lib/stores/layout";
   import { formatSize } from "$lib/utils";
   import { m } from "$lib/i18n";
@@ -52,6 +52,29 @@
   }
 
   let ctxSummary = $state<ProjectContextSummary | null>(null);
+
+  // Skill ids loaded via connect_skill in the current chat — used to highlight
+  // active skills green in the auto-connected section.
+  let loadedSkillIds = $derived.by(() => {
+    if (!chatId) return new Set<string>();
+    const msgs = $messagesByChat[chatId] ?? [];
+    const ids = new Set<string>();
+    for (const msg of msgs) {
+      for (const block of msg.blocks) {
+        if (block.type === "tool_use" && block.name === "connect_skill") {
+          try {
+            const input = block.input ? JSON.parse(block.input) : null;
+            const skillId = input?.skill_id;
+            if (typeof skillId === "string" && skillId) ids.add(skillId);
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    }
+    return ids;
+  });
+
   async function loadCtx() {
     if (!projectId) return;
     try {
@@ -235,7 +258,10 @@
           {#if ctxSummary.skills.length > 0}
             <div class="ctx-sub">{m.context_skills()}</div>
             {#each ctxSummary.skills as s (s.id)}
-              <div class="ctx-row" title={s.description}><Sparkles size={12} /><span class="ctx-name">{s.id}</span></div>
+              <div class="ctx-row" title={s.description}>
+                <Sparkles size={12} />
+                <span class="ctx-name" class:ctx-name-active={loadedSkillIds.has(s.id)}>{s.id}</span>
+              </div>
             {/each}
           {/if}
         {/if}
@@ -380,6 +406,9 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     font-family: var(--font-mono);
+  }
+  .ctx-name-active {
+    color: #22c55e;
   }
   .ctx-hint {
     font-size: 0.68rem;
