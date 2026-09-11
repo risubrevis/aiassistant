@@ -8,7 +8,7 @@
 # For the from-source build, use the regular PKGBUILD instead.
 
 pkgname=aiassistant
-pkgver=1.0.34
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Cross-platform provider-agnostic desktop app for chatting with LLMs and working with projects"
 arch=('x86_64')

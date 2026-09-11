@@ -47,6 +47,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub appearance: Appearance,
     #[serde(default)]
+    pub general: General,
+    #[serde(default)]
     pub defaults: Defaults,
     #[serde(default)]
     pub hotkeys: Hotkeys,
@@ -207,6 +209,7 @@ impl Default for AppConfig {
         Self {
             config_version: 1,
             appearance: Appearance::default(),
+            general: General::default(),
             defaults: Defaults::default(),
             hotkeys: Hotkeys::default(),
             permissions: Permissions::defaults(),
@@ -258,6 +261,26 @@ impl Default for Appearance {
             language: default_language(),
             show_thinking: false,
             compact: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct General {
+    #[serde(default = "default_true")]
+    pub send_on_enter: bool,
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+    #[serde(default = "default_true")]
+    pub remember_window_state: bool,
+}
+
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            send_on_enter: true,
+            notifications_enabled: true,
+            remember_window_state: true,
         }
     }
 }

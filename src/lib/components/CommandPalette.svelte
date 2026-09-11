@@ -93,12 +93,14 @@
       },
     );
     for (const [tab, label] of [
+      ["general", m.cmd_settings_general()],
       ["providers", m.cmd_settings_providers()],
       ["models", m.cmd_settings_models()],
       ["mcp", m.cmd_settings_mcp()],
       ["tools", m.cmd_settings_tools()],
       ["agents", m.cmd_settings_agents()],
       ["appearance", m.cmd_settings_appearance()],
+      ["data", m.cmd_settings_data()],
     ] as const) {
       list.push({
         id: `open_settings_${tab}`,

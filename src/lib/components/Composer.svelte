@@ -14,6 +14,7 @@
   import { tick, type Snippet } from "svelte";
   import { m } from "$lib/i18n";
   import { sendMessage, cancelTurn, currentChatId } from "$lib/stores/chat";
+  import { config } from "$lib/stores/config";
   import { skills as skillsStore } from "$lib/stores/skills";
   import { pendingTemplatePayload } from "$lib/stores/prompts";
   import { attachmentAdd, attachmentRemove, attachmentReadDataUrl, type Attachment, type Skill } from "$lib/tauri";
@@ -38,6 +39,7 @@
 
   let placeholder = $derived(inProject ? m.composer_hint_project() : m.composer_placeholder());
   let canSend = $derived((Boolean(text.trim()) || pending.length > 0) && modelSelected);
+  let sendOnEnter = $derived($config?.general?.send_on_enter ?? true);
   let availableSkills = $derived<Skill[]>($skillsStore);
   let selectedSkills = $derived(
     selectedSkillIds
@@ -168,7 +170,8 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.isComposing) return;
+    if (sendOnEnter && e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       submit();
     }

@@ -5,6 +5,9 @@ mod write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+// Re-exported for the settings surface; no internal consumer yet.
+#[allow(unused_imports)]
+pub use model::General;
 pub use model::{
     AgentContract, AppConfig as Config, EventSchema, ModelRef, Network, Permissions, Provider,
     Skill, WebSearch,
@@ -16,8 +19,9 @@ pub use write::write_max_turns;
 pub use write::{
     write_add_environment_info, write_auto_collapse_context_pct, write_auto_pull_changes,
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
-    write_environment_info, write_logging_field, write_mode, write_network, write_rag_enabled,
-    write_system_prompt, write_vision_model_enabled, write_web_search,
+    write_environment_info, write_logging_field, write_mode, write_network,
+    write_notifications_enabled, write_rag_enabled, write_remember_window_state,
+    write_send_on_enter, write_system_prompt, write_vision_model_enabled, write_web_search,
 };
 
 /// App config directory: `config_dir/aiassistant` per-OS (XDG/AppData/Library).
@@ -139,6 +143,11 @@ mono_font = ""              # empty = ui-monospace stack
 language = "en"             # i18n
 show_thinking = false
 compact = false
+
+[general]
+send_on_enter = true         # Enter sends a message, Shift+Enter for a new line. false = Enter inserts a newline (send via Cmd/Ctrl+Enter hotkey).
+notifications_enabled = true # desktop notification when a response / agent task completes
+remember_window_state = true # restore window size & position on launch
 
 [defaults]
 mode = "plan"               # minimal | plan | write

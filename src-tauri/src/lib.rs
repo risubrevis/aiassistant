@@ -88,6 +88,24 @@ fn app_paths(state: State<'_, AppState>) -> PathsPayload {
     }
 }
 
+/// Delete attachments never linked to a message (no 24h grace on a manual clear).
+#[tauri::command]
+async fn clear_cache(state: State<'_, AppState>) -> Result<u64, String> {
+    db::attachments::remove_orphans(&state.pool, 0)
+        .await
+        .map(|n| n as u64)
+        .map_err(|e| e.to_string())
+}
+
+/// Write a reset marker consumed on the next launch (the frontend relaunches).
+#[tauri::command]
+fn reset_app() -> Result<(), String> {
+    let dir = db::data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(".reset_marker"), b"1").map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 fn update_install_supported() -> bool {
     updater::install_supported()
@@ -125,6 +143,44 @@ fn set_theme(theme: String, state: State<AppState>, app: AppHandle) -> Result<()
     config::write_appearance_field("theme", &theme).map_err(|e| e.to_string())?;
     if let Ok(mut w) = state.config.write() {
         w.appearance.theme = theme;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_send_on_enter(value: bool, state: State<AppState>, app: AppHandle) -> Result<(), String> {
+    config::write_send_on_enter(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.general.send_on_enter = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_notifications_enabled(
+    value: bool,
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    config::write_notifications_enabled(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.general.notifications_enabled = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_remember_window_state(
+    value: bool,
+    state: State<AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    config::write_remember_window_state(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.general.remember_window_state = value;
     }
     app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
     Ok(())
@@ -300,6 +356,7 @@ fn open_settings_window(
     state: State<'_, AppState>,
     tab: Option<String>,
 ) -> Result<(), String> {
+    let remember = state.config.read().unwrap().general.remember_window_state;
     if let Some(win) = app.get_webview_window("settings") {
         win.show().map_err(|e| e.to_string())?;
         win.set_focus().map_err(|e| e.to_string())?;
@@ -323,7 +380,9 @@ fn open_settings_window(
         .center()
         .build()
         .map_err(|e| e.to_string())?;
-        let _ = win.restore_state(tauri_plugin_window_state::StateFlags::all());
+        if remember {
+            let _ = win.restore_state(tauri_plugin_window_state::StateFlags::all());
+        }
     }
     Ok(())
 }
@@ -3391,6 +3450,48 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+/// Wipe all app data when a previous run left the `.reset_marker` file
+/// (written by `reset_app` before a relaunch). The next `config::load()` and
+/// `db::init()` recreate a fresh config and database.
+fn apply_reset_if_marker() -> bool {
+    let marker = db::data_dir().join(".reset_marker");
+    if !marker.exists() {
+        return false;
+    }
+    info!("reset marker found, wiping app data");
+
+    let db_path = db::db_path();
+    let mut paths: Vec<std::path::PathBuf> = vec![
+        db_path.clone(),
+        config::config_path(),
+        config::system_prompt_path(),
+        config::environment_path(),
+        marker,
+    ];
+    for suffix in ["-wal", "-shm"] {
+        let mut name = db_path.clone().into_os_string();
+        name.push(suffix);
+        paths.push(std::path::PathBuf::from(name));
+    }
+    paths.push(db::attachments::attachments_dir());
+
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+        let removed = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        if let Err(e) = removed {
+            warn!("reset: failed to remove {}: {e}", path.display());
+        }
+    }
+    info!("app data reset complete");
+    true
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     configure_linux_decorations();
@@ -3401,6 +3502,8 @@ pub fn run() {
         let backtrace = std::backtrace::Backtrace::force_capture();
         tracing::error!("panic: {info}\n{backtrace}");
     }));
+
+    apply_reset_if_marker();
 
     let loaded = config::load().unwrap_or_else(|e| {
         info!("config load failed, using defaults: {e}");
@@ -3414,17 +3517,46 @@ pub fn run() {
     let config_lock = Arc::new(RwLock::new(loaded));
     net::init(&config_lock.read().unwrap().network);
 
+    let remember_window_state = config_lock.read().unwrap().general.remember_window_state;
+    let window_state_flags = if remember_window_state {
+        tauri_plugin_window_state::StateFlags::all()
+    } else {
+        tauri_plugin_window_state::StateFlags::empty()
+    };
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags)
+                .build(),
+        )
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            // remember_window_state is off: the plugin runs with empty state flags
+            // (no auto restore/save); also drop any previously saved geometry.
+            if !remember_window_state {
+                use tauri_plugin_window_state::DEFAULT_FILENAME;
+                if let Ok(dir) = handle.path().app_config_dir() {
+                    let state_file = dir.join(DEFAULT_FILENAME);
+                    match std::fs::remove_file(&state_file) {
+                        Ok(()) => info!("removed saved window state (remember_window_state off)"),
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => warn!(
+                            "failed to remove window state file {}: {e}",
+                            state_file.display()
+                        ),
+                    }
+                }
+            }
+
             let pool = tauri::async_runtime::block_on(async { db::init().await })?;
             crate::tools::set_db_pool(pool.clone());
             let active: ActiveTurns = Arc::new(Mutex::new(HashMap::new()));
@@ -3496,10 +3628,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             config_get,
             app_paths,
+            clear_cache,
+            reset_app,
             logs_read,
             logs_clear,
             set_log_level,
             set_theme,
+            set_send_on_enter,
+            set_notifications_enabled,
+            set_remember_window_state,
             set_network,
             network_test,
             network_has_password,
@@ -3695,8 +3832,14 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {
-            use tauri_plugin_window_state::AppHandleExt;
-            let _ = app_handle.save_window_state(tauri_plugin_window_state::StateFlags::all());
+            let remember = app_handle
+                .try_state::<AppState>()
+                .map(|state| state.config.read().unwrap().general.remember_window_state)
+                .unwrap_or(false);
+            if remember {
+                use tauri_plugin_window_state::AppHandleExt;
+                let _ = app_handle.save_window_state(tauri_plugin_window_state::StateFlags::all());
+            }
         }
     });
 }

@@ -3,21 +3,10 @@
   import { settingsTab } from "$lib/stores/settings";
   import { settingsNavWidth, setSettingsNavWidth, saveSettingsNavWidth } from "$lib/stores/layout";
   import { theme, applyTheme, type Theme } from "$lib/stores/theme";
-  import {
-    loadLanguageSetting,
-    saveLanguageSetting,
-    applyLanguageSetting,
-    SUPPORTED_LOCALES,
-    type LanguageSetting,
-    type Locale,
-  } from "$lib/stores/lang";
   import { m } from "$lib/i18n";
-  import {
-    setTheme,
-    takeSettingsTab,
-    onSettingsNavigate,
-    emitLangChanged,
-  } from "$lib/tauri";
+  import { setTheme, takeSettingsTab, onSettingsNavigate } from "$lib/tauri";
+  import SettingsGeneral from "./SettingsGeneral.svelte";
+  import SettingsData from "./SettingsData.svelte";
   import SettingsProviders from "./SettingsProviders.svelte";
   import SettingsModels from "./SettingsModels.svelte";
   import SettingsMcp from "./SettingsMcp.svelte";
@@ -31,9 +20,9 @@
   import SettingsNetwork from "./SettingsNetwork.svelte";
   import SettingsLogs from "./SettingsLogs.svelte";
   import SettingsAbout from "./SettingsAbout.svelte";
-  import Select from "./Select.svelte";
 
   const tabs = [
+    { id: "general", label: m.settings_tab_general() },
     { id: "providers", label: m.settings_tab_providers() },
     { id: "models", label: m.settings_tab_models() },
     { id: "mcp", label: m.settings_tab_mcp() },
@@ -47,26 +36,17 @@
     { id: "appearance", label: m.settings_tab_appearance() },
     { id: "network", label: m.settings_tab_network() },
     { id: "logs", label: m.settings_tab_logs() },
+    { id: "data", label: m.settings_tab_data() },
     { id: "about", label: m.settings_tab_about() },
   ] as const;
 
   const themes: Theme[] = ["system", "light", "dark"];
-  const languageOptions: { value: LanguageSetting; label: string }[] = [
-    { value: "system", label: m.settings_appearance_language_system() },
-    ...(Object.keys(SUPPORTED_LOCALES) as Locale[]).map((code) => ({
-      value: code,
-      label: SUPPORTED_LOCALES[code],
-    })),
-  ];
-
-  let langSetting = $state<LanguageSetting>("system");
 
   let currentTabLabel = $derived(
     tabs.find((t) => t.id === $settingsTab)?.label ?? "",
   );
 
   onMount(() => {
-    langSetting = loadLanguageSetting();
     // Tab requested by the opener for a freshly-created window.
     void takeSettingsTab().then((t) => {
       if (t) settingsTab.set(t);
@@ -81,16 +61,6 @@
     });
     return () => unlisten?.();
   });
-
-  async function chooseLanguage(value: string) {
-    const setting: LanguageSetting =
-      value in SUPPORTED_LOCALES ? (value as Locale) : "system";
-    langSetting = setting;
-    saveLanguageSetting(setting);
-    // paraglide reloads this window; notify the main window to reload too.
-    await emitLangChanged();
-    await applyLanguageSetting(setting);
-  }
 
   async function chooseTheme(t: Theme) {
     theme.set(t);
@@ -148,7 +118,9 @@
   </nav>
 
   <section class="settings-content">
-    {#if $settingsTab === "appearance"}
+    {#if $settingsTab === "general"}
+      <SettingsGeneral />
+    {:else if $settingsTab === "appearance"}
       <div class="space-y-4">
         <div>
           <div class="mb-2 text-sm font-medium">
@@ -170,15 +142,6 @@
             {/each}
           </div>
         </div>
-        <div>
-          <div class="mb-2 text-sm font-medium">{m.settings_appearance_language()}</div>
-          <Select
-            class="w-full max-w-45"
-            value={langSetting}
-            items={languageOptions}
-            onchange={(v) => void chooseLanguage(v)}
-          />
-        </div>
       </div>
     {:else if $settingsTab === "network"}
       <SettingsNetwork />
@@ -194,6 +157,8 @@
       <SettingsAgents />
     {:else if $settingsTab === "logs"}
       <SettingsLogs />
+    {:else if $settingsTab === "data"}
+      <SettingsData />
     {:else if $settingsTab === "about"}
       <SettingsAbout />
     {:else if $settingsTab === "prompts"}

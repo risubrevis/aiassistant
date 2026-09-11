@@ -49,8 +49,15 @@ export interface WebSearchConfig {
 }
 export type WebSearchConfigInput = WebSearchConfig;
 
+export interface GeneralConfig {
+  send_on_enter: boolean;
+  notifications_enabled: boolean;
+  remember_window_state: boolean;
+}
+
 export interface AppConfig {
   config_version: number;
+  general: GeneralConfig;
   appearance: Appearance;
   defaults: {
     mode: string;
@@ -531,6 +538,14 @@ export const networkHasPassword = () => invoke<boolean>("network_has_password");
 export const clearProxyPassword = () => invoke<void>("clear_proxy_password");
 export const setWebSearch = (input: WebSearchConfigInput) =>
   invoke<void>("set_web_search", { input });
+export const setSendOnEnter = (value: boolean) =>
+  invoke<void>("set_send_on_enter", { value });
+export const setNotificationsEnabled = (value: boolean) =>
+  invoke<void>("set_notifications_enabled", { value });
+export const setRememberWindowState = (value: boolean) =>
+  invoke<void>("set_remember_window_state", { value });
+export const clearCache = () => invoke<number>("clear_cache");
+export const resetApp = () => invoke<void>("reset_app");
 
 // --- updates ---
 

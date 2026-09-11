@@ -49,6 +49,7 @@
   import * as agentsStore from "$lib/stores/agents";
   import { initConfigStore, config } from "$lib/stores/config";
   import { initSkillsStore } from "$lib/stores/skills";
+  import { initNotifications } from "$lib/stores/notifications";
   import { DEFAULT_HOTKEYS, parseHotkey, hotkeyMatches } from "$lib/hotkeys";
  import { handleHotkey } from "$lib/actions";
   import SettingsApp from "$lib/components/Settings.svelte";
@@ -254,6 +255,9 @@
 
     // The Settings window only needs theme + config; skip chat/agent wiring.
     if (isSettingsWindow) return;
+
+    // Desktop notifications for completed chat turns and agent batches.
+    initNotifications();
 
     // Chat streaming event wiring (docs/13, docs/18).
     onChatStatus((e) => {

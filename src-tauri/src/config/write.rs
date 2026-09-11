@@ -130,6 +130,27 @@ pub fn write_add_environment_info(value: bool) -> Result<()> {
     write_doc(doc)
 }
 
+/// Set `[general].send_on_enter` (Enter sends a message; false = Enter inserts a newline).
+pub fn write_send_on_enter(value: bool) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["general"]["send_on_enter"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
+/// Set `[general].notifications_enabled` (desktop notification on response/task completion).
+pub fn write_notifications_enabled(value: bool) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["general"]["notifications_enabled"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
+/// Set `[general].remember_window_state` (restore window size & position on launch).
+pub fn write_remember_window_state(value: bool) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["general"]["remember_window_state"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
 /// Set `[defaults].rag_enabled` (master switch for RAG / embedding retrieval).
 pub fn write_rag_enabled(value: bool) -> Result<()> {
     let mut doc = load_doc()?;

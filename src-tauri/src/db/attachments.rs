@@ -207,7 +207,7 @@ pub async fn remove(pool: &SqlitePool, id: &str) -> Result<()> {
 
 /// Delete attachments never linked to a message (e.g. user picked a file but
 /// never sent it) older than `older_than_ms`.
-pub async fn remove_orphans(pool: &SqlitePool, older_than_ms: i64) -> Result<()> {
+pub async fn remove_orphans(pool: &SqlitePool, older_than_ms: i64) -> Result<usize> {
     let cutoff = chrono::Utc::now().timestamp_millis() - older_than_ms;
     let rows = sqlx::query(
         "SELECT id, storage_path FROM attachments \
@@ -225,7 +225,7 @@ pub async fn remove_orphans(pool: &SqlitePool, older_than_ms: i64) -> Result<()>
             .execute(pool)
             .await?;
     }
-    Ok(())
+    Ok(rows.len())
 }
 
 /// Remove a chat's attachment files from disk. Run before `delete_chat`, whose
