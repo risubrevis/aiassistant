@@ -16,6 +16,7 @@ const MAX_FILES_PER_PATH: usize = 600;
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 const MAX_CHUNKS_PER_FILE: usize = 200;
 const RAG_TOP_K: usize = 6;
+const RAG_MIN_SCORE: f32 = 0.20;
 const SNIPPET_CHARS: usize = 900;
 
 pub fn embed_enabled(cfg: &Config) -> bool {
@@ -93,6 +94,37 @@ pub async fn reindex_project(pool: &SqlitePool, cfg: &Config, project_id: &str) 
         }
     }
     Ok(total)
+}
+
+/// Incrementally (re)index a single project file. No-op when RAG is disabled,
+/// the file is not text, exceeds MAX_FILE_BYTES, or is empty. Used by the
+/// project file-watcher for incremental updates.
+pub async fn index_single_file(
+    pool: &SqlitePool,
+    cfg: &Config,
+    project_id: &str,
+    _root: &str,
+    rel: &str,
+    abs: &str,
+) -> Result<usize> {
+    if !embed_enabled(cfg) || !is_text_path(Path::new(abs)) {
+        return Ok(0);
+    }
+    index_file_at(pool, cfg, "project", project_id, "file", None, rel, abs).await
+}
+
+/// Remove indexed chunks for a deleted project file. Guarded by embed_enabled
+/// to match reindex_project: chunks are preserved while RAG is disabled.
+pub async fn delete_file_chunks(
+    pool: &SqlitePool,
+    cfg: &Config,
+    project_id: &str,
+    rel: &str,
+) -> Result<()> {
+    if !embed_enabled(cfg) {
+        return Ok(());
+    }
+    store::delete_file_source(pool, "project", project_id, rel).await
 }
 
 pub async fn clear_chat(pool: &SqlitePool, chat_id: &str) -> Result<()> {
@@ -338,7 +370,10 @@ pub async fn retrieve_for_turn(
             return None;
         }
     };
-    let top = store::top_k(&qvec, &rows, RAG_TOP_K);
+    let top: Vec<_> = store::top_k(&qvec, &rows, RAG_TOP_K)
+        .into_iter()
+        .filter(|(_, s)| *s >= RAG_MIN_SCORE)
+        .collect();
     if top.is_empty() {
         return None;
     }

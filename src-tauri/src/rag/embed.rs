@@ -138,22 +138,22 @@ async fn embed_openai(
     Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
 }
 
-/// Chunk plain text into ~`CHUNK_CHARS`-char pieces with `OVERLAP` overlap,
+/// Chunk plain text into ~`CHUNK_BYTES`-byte pieces with `OVERLAP` overlap,
 /// snapped to UTF-8 char boundaries.
 pub fn chunk_text(text: &str) -> Vec<String> {
-    const CHUNK_CHARS: usize = 1200;
+    const CHUNK_BYTES: usize = 1200;
     const OVERLAP: usize = 200;
     let s = text.trim();
     if s.is_empty() {
         return vec![];
     }
-    if s.len() <= CHUNK_CHARS {
+    if s.len() <= CHUNK_BYTES {
         return vec![s.to_string()];
     }
     let mut out = Vec::new();
     let mut start = 0usize;
     while start < s.len() {
-        let mut end = (start + CHUNK_CHARS).min(s.len());
+        let mut end = (start + CHUNK_BYTES).min(s.len());
         while end < s.len() && !s.is_char_boundary(end) {
             end += 1;
         }

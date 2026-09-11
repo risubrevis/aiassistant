@@ -63,6 +63,25 @@ pub async fn replace_source(
     Ok(())
 }
 
+/// Delete chunks for a file source identified by (scope, scope_id, source_path)
+/// where source_kind = 'file' (source_id is NULL for file sources).
+pub async fn delete_file_source(
+    pool: &SqlitePool,
+    scope: &str,
+    scope_id: &str,
+    source_path: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM embeddings WHERE scope = ?1 AND scope_id = ?2 AND source_kind = 'file' AND source_path = ?3",
+    )
+    .bind(scope)
+    .bind(scope_id)
+    .bind(source_path)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn delete_scope(pool: &SqlitePool, scope: &str, scope_id: &str) -> Result<()> {
     sqlx::query("DELETE FROM embeddings WHERE scope = ?1 AND scope_id = ?2")
         .bind(scope)

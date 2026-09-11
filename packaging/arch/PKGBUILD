@@ -9,7 +9,7 @@
 # variant, replace `source` with a git+https://... URL and use `pkgver()`.
 
 pkgname=aiassistant
-pkgver=1.1.2
+pkgver=1.1.3
 pkgrel=1
 pkgdesc="Cross-platform provider-agnostic desktop app for chatting with LLMs and working with projects"
 arch=('x86_64' 'aarch64')

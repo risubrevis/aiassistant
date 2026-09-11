@@ -1774,6 +1774,7 @@ async fn project_update(
         .map_err(|e| e.to_string())?;
     state.watcher.restart_for_project(
         app,
+        state.config.clone(),
         state.pool.clone(),
         state.changes.clone(),
         project.id.clone(),
@@ -1858,9 +1859,13 @@ async fn project_path_add(
     .await
     .map_err(|e| e.to_string())?;
     let pid_c = project_id.clone();
-    state
-        .watcher
-        .restart_for_project(app, state.pool.clone(), state.changes.clone(), project_id);
+    state.watcher.restart_for_project(
+        app,
+        state.config.clone(),
+        state.pool.clone(),
+        state.changes.clone(),
+        project_id,
+    );
     // Index the new path for RAG (no-op when no embedding model is set).
     let cfg = state.config.read().unwrap().clone();
     if rag::embed_enabled(&cfg) {
@@ -1890,9 +1895,13 @@ async fn project_path_delete(
             .await
             .map_err(|e| e.to_string())?;
     }
-    state
-        .watcher
-        .restart_for_project(app, state.pool.clone(), state.changes.clone(), project_id);
+    state.watcher.restart_for_project(
+        app,
+        state.config.clone(),
+        state.pool.clone(),
+        state.changes.clone(),
+        project_id,
+    );
     Ok(())
 }
 
@@ -3588,6 +3597,7 @@ pub fn run() {
             let changes_c = changes.clone();
             let pool_c = pool.clone();
             let app_c = handle.clone();
+            let config_c = config_lock.clone();
 
             handle.manage(AppState {
                 config: config_lock.clone(),
@@ -3614,6 +3624,7 @@ pub fn run() {
                     for p in projs {
                         watcher_c.restart_for_project(
                             app_c.clone(),
+                            config_c.clone(),
                             pool_c.clone(),
                             changes_c.clone(),
                             p.id,

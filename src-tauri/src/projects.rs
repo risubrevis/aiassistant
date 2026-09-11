@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -9,7 +10,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use crate::config::Config;
 use crate::db::models::{self, Chat, Project, ProjectPath};
+use crate::rag;
 
 /// Per-project file watcher manager. Spawns one notify watcher per watched
 /// path; emits `project:file_changed` events to the UI (ContextPanel, docs/08).
@@ -34,6 +37,7 @@ impl ProjectWatcher {
     pub fn restart_for_project(
         &self,
         app: AppHandle,
+        config: Arc<RwLock<Config>>,
         pool: SqlitePool,
         changes: ChangeTracker,
         project_id: String,
@@ -86,25 +90,28 @@ impl ProjectWatcher {
                 let pid3 = pid.clone();
                 let wp_root = wp.path.clone();
                 let changes3 = changes.clone();
+                let pool3 = pool.clone();
+                let config3 = config.clone();
                 tauri::async_runtime::spawn(async move {
-                    while let Some(res) = rx.recv().await {
-                        match res {
-                            Ok(ev) => {
+                    let mut pending: HashMap<PathBuf, String> = HashMap::new();
+                    loop {
+                        match tokio::time::timeout(Duration::from_millis(1500), rx.recv()).await {
+                            Ok(Some(Ok(ev))) => {
                                 if matches!(ev.kind, EventKind::Access(_)) {
                                     continue;
                                 }
+                                let kind = match ev.kind {
+                                    EventKind::Create(_) => "created",
+                                    EventKind::Modify(_) => "modified",
+                                    EventKind::Remove(_) => "removed",
+                                    _ => "changed",
+                                };
                                 for p in ev.paths {
                                     let rel = p
                                         .strip_prefix(&wp_root)
                                         .unwrap_or(&p)
                                         .display()
                                         .to_string();
-                                    let kind = match ev.kind {
-                                        EventKind::Create(_) => "created",
-                                        EventKind::Modify(_) => "modified",
-                                        EventKind::Remove(_) => "removed",
-                                        _ => "changed",
-                                    };
                                     changes3.record(&pid3, &p.display().to_string(), kind);
                                     let _ = app3.emit(
                                         "project:file_changed",
@@ -114,9 +121,19 @@ impl ProjectWatcher {
                                             kind: kind.into(),
                                         },
                                     );
+                                    pending.insert(p, kind.to_string());
                                 }
                             }
-                            Err(e) => warn!("watch event error: {e}"),
+                            Ok(Some(Err(e))) => warn!("watch event error: {e}"),
+                            Ok(None) => {
+                                flush_rag_updates(&mut pending, &pool3, &config3, &pid3, &wp_root)
+                                    .await;
+                                break;
+                            }
+                            Err(_) => {
+                                flush_rag_updates(&mut pending, &pool3, &config3, &pid3, &wp_root)
+                                    .await;
+                            }
                         }
                     }
                 });
@@ -136,6 +153,42 @@ impl ProjectWatcher {
             for k in keys {
                 h.remove(&k);
             }
+        }
+    }
+}
+
+/// Apply debounced RAG updates for files changed in a watched path. Never
+/// breaks the watcher: errors are logged and skipped.
+async fn flush_rag_updates(
+    pending: &mut HashMap<PathBuf, String>,
+    pool: &SqlitePool,
+    config: &RwLock<Config>,
+    project_id: &str,
+    root: &str,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let cfg = config.read().unwrap().clone();
+    if !rag::embed_enabled(&cfg) {
+        pending.clear();
+        return;
+    }
+    for (abs, kind) in pending.drain() {
+        let rel = abs.strip_prefix(root).unwrap_or(&abs).display().to_string();
+        let res = match kind.as_str() {
+            "removed" => rag::delete_file_chunks(pool, &cfg, project_id, &rel)
+                .await
+                .map(|_| ()),
+            _ => {
+                let abs_str = abs.display().to_string();
+                rag::index_single_file(pool, &cfg, project_id, root, &rel, &abs_str)
+                    .await
+                    .map(|_| ())
+            }
+        };
+        if let Err(e) = res {
+            warn!("rag incremental update failed for {rel}: {e}");
         }
     }
 }
