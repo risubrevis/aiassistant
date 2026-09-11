@@ -4231,7 +4231,7 @@ pub struct WebHookAdd;
 #[async_trait]
 impl Tool for WebHookAdd {
     fn category(&self) -> ToolCategory {
-        ToolCategory::Network
+        ToolCategory::Write
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
@@ -4239,7 +4239,7 @@ impl Tool for WebHookAdd {
             description: "Create a new web hook that can be invoked via web_hook_run. \
             The hook is saved to Settings → Web Hooks. The secret (for bearer/basic/api_key auth) \
             cannot be set through this tool — ask the user to set it manually in Settings → Web Hooks. \
-            Requires user approval."
+            Gated as a write: auto-applies in Edits: Auto mode, staged for approval in Edits: Ask mode."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -4363,12 +4363,12 @@ pub struct WebHookModify;
 #[async_trait]
 impl Tool for WebHookModify {
     fn category(&self) -> ToolCategory {
-        ToolCategory::Network
+        ToolCategory::Write
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "web_hook_modify".into(),
-            description: "Modify an existing web hook by its current name. Only the fields you provide are updated; omitted fields keep their current values. To rename the hook, set `new_name`. Requires user approval."
+            description: "Modify an existing web hook by its current name. Only the fields you provide are updated; omitted fields keep their current values. To rename the hook, set `new_name`. Gated as a write: auto-applies in Edits: Auto mode, staged for approval in Edits: Ask mode."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -4519,12 +4519,12 @@ pub struct WebHookDelete;
 #[async_trait]
 impl Tool for WebHookDelete {
     fn category(&self) -> ToolCategory {
-        ToolCategory::Network
+        ToolCategory::Destructive
     }
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "web_hook_delete".into(),
-            description: "Delete a web hook by its name (slug). Also removes its secret from the OS keyring. Requires user approval."
+            description: "Delete a web hook by its name (slug). Also removes its secret from the OS keyring. Always requires explicit approval (destructive: clears a keyring secret)."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",

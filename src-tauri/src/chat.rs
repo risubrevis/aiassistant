@@ -1518,9 +1518,14 @@ async fn run_turn(
     mcp.add_to_registry(&mut registry, &mode).await;
     if mode != "minimal" {
         registry.register(Box::new(crate::tools::builtin::WebHookList));
-        registry.register(Box::new(crate::tools::builtin::WebHookAdd));
-        registry.register(Box::new(crate::tools::builtin::WebHookModify));
-        registry.register(Box::new(crate::tools::builtin::WebHookDelete));
+        // Mutating web-hook config tools are writes/destructive: register them
+        // only in Write mode (Plan mode blocks mutations). web_hook_run stays
+        // available in Plan as a read-ish network action on user-configured hooks.
+        if mode == "write" {
+            registry.register(Box::new(crate::tools::builtin::WebHookAdd));
+            registry.register(Box::new(crate::tools::builtin::WebHookModify));
+            registry.register(Box::new(crate::tools::builtin::WebHookDelete));
+        }
         if crate::db::web_hooks::has_active(&pool)
             .await
             .unwrap_or(false)

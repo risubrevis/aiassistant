@@ -116,6 +116,13 @@ fn arg_str(args: &Value, key: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// In Write mode with Commands on Auto, readonly and network research tools
+/// run without an approval card — less friction during exploration. Explicit
+/// `deny` rules still win; only `ask` is downgraded to `allow`.
+fn is_auto_research(mode: &str, command_toggle: &str) -> bool {
+    mode == "write" && command_toggle == "auto"
+}
+
 /// Evaluate the permission gate for a tool call.
 pub fn gate(
     category: ToolCategory,
@@ -146,29 +153,52 @@ pub fn gate(
                 return Decision::Allow;
             }
             match match_rules(&perms.read, &path, true).as_deref() {
-                Some("allow") => Decision::Allow,
-                Some("ask") => Decision::Ask {
-                    summary: format!("read {name}: {path}"),
-                    preview: None,
-                },
                 Some("deny") => Decision::Deny(format!("read denied by policy: {path}")),
+                Some("ask") => {
+                    // Write + Commands Auto: don't interrupt research with
+                    // read approval cards. `deny` above still blocks.
+                    if is_auto_research(mode, command_toggle) {
+                        Decision::Allow
+                    } else {
+                        Decision::Ask {
+                            summary: format!("read {name}: {path}"),
+                            preview: None,
+                        }
+                    }
+                }
                 Some(_) | None => Decision::Allow,
             }
         }
         ToolCategory::Write => {
-            let path = arg_str(args, "path").unwrap_or_default();
-            if path.is_empty() {
-                return Decision::Allow;
+            // Collect the paths this tool touches. move_path uses src/dst; other
+            // write tools use path. Path-less writes (e.g. web_hook_add/modify,
+            // which mutate the Settings DB) have no file to snapshot.
+            let paths: Vec<String> = match name {
+                "move_path" => [arg_str(args, "src"), arg_str(args, "dst")]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                _ => arg_str(args, "path").into_iter().collect(),
+            };
+            // `deny` rules block regardless of the toggle.
+            for p in &paths {
+                if !p.is_empty()
+                    && matches!(match_rules(&perms.edit, p, true).as_deref(), Some("deny"))
+                {
+                    return Decision::Deny(format!("edit denied by policy: {p}"));
+                }
             }
-            match match_rules(&perms.edit, &path, true).as_deref() {
-                Some("deny") => Decision::Deny(format!("edit denied by policy: {path}")),
-                // edit_toggle=auto -> apply immediately; ask -> stage (Pending changes).
-                _ => {
-                    if edit_toggle == "auto" {
-                        Decision::Allow
-                    } else {
-                        Decision::Stage
-                    }
+            if edit_toggle == "auto" {
+                Decision::Allow
+            } else if paths.iter().any(|p| !p.is_empty()) {
+                // edit_toggle=ask -> stage (Pending changes snapshot+revert).
+                Decision::Stage
+            } else {
+                // Path-less write (e.g. a config mutation): no file to snapshot,
+                // so ask directly instead of staging.
+                Decision::Ask {
+                    summary: name.to_string(),
+                    preview: None,
                 }
             }
         }
@@ -201,6 +231,13 @@ pub fn gate(
             }
         }
         ToolCategory::Network => {
+            // web_search / web_fetch / web_hook_run are research/network actions.
+            // In Write + Commands Auto they run without an approval card to cut
+            // friction during exploration. (Mutating web_hook_add/modify/delete
+            // are no longer in this category — they are Write/Destructive.)
+            if is_auto_research(mode, command_toggle) {
+                return Decision::Allow;
+            }
             // The tool name is already shown as the card header; the summary
             // carries the concrete target (search query / fetched URL) so the
             // approval card reads e.g. "web_search\nlatest rust async news"
@@ -419,15 +456,248 @@ mod tests {
     }
 
     #[test]
+    fn readonly_ask_downgraded_in_write_auto() {
+        let mut p = perms();
+        // Explicit "ask" rule for a path.
+        p.read.insert("secret/**".into(), "ask".into());
+        // Write + Commands Auto -> Allow (research shouldn't be interrupted).
+        assert!(matches!(
+            gate(
+                ToolCategory::Readonly,
+                "read_file",
+                &json!({"path":"secret/key.pem"}),
+                "write",
+                "auto",
+                "ask",
+                &p
+            ),
+            Decision::Allow
+        ));
+        // Write + Commands Manual -> still Ask.
+        assert!(matches!(
+            gate(
+                ToolCategory::Readonly,
+                "read_file",
+                &json!({"path":"secret/key.pem"}),
+                "write",
+                "manual",
+                "ask",
+                &p
+            ),
+            Decision::Ask { .. }
+        ));
+        // Plan mode -> still Ask (plan blocks write/exec, not readonly).
+        assert!(matches!(
+            gate(
+                ToolCategory::Readonly,
+                "read_file",
+                &json!({"path":"secret/key.pem"}),
+                "plan",
+                "auto",
+                "ask",
+                &p
+            ),
+            Decision::Ask { .. }
+        ));
+    }
+
+    #[test]
+    fn network_auto_research_allows() {
+        let p = perms();
+        // web_search in Write + Auto -> Allow (no approval card).
+        assert!(matches!(
+            gate(
+                ToolCategory::Network,
+                "web_search",
+                &json!({"query": "latest rust async news"}),
+                "write",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Allow
+        ));
+        // web_fetch in Write + Auto -> Allow.
+        assert!(matches!(
+            gate(
+                ToolCategory::Network,
+                "web_fetch",
+                &json!({"url": "https://example.com/page"}),
+                "write",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Allow
+        ));
+        // web_hook_run in Write + Auto -> Allow (user-configured endpoint).
+        assert!(matches!(
+            gate(
+                ToolCategory::Network,
+                "web_hook_run",
+                &json!({"name": "deploy"}),
+                "write",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Allow
+        ));
+        // Write + Commands Manual -> web_search still asks.
+        assert!(matches!(
+            gate(
+                ToolCategory::Network,
+                "web_search",
+                &json!({"query": "rust"}),
+                "write",
+                "manual",
+                "auto",
+                &p
+            ),
+            Decision::Ask { .. }
+        ));
+    }
+
+    #[test]
+    fn web_hook_config_tools_recategorized() {
+        let p = perms();
+        // web_hook_add/modify are now Write (path-less config mutations):
+        // Write + Edits Auto -> Allow; Write + Edits Ask -> Ask (no file to stage).
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "web_hook_add",
+                &json!({"name": "x"}),
+                "write",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "web_hook_modify",
+                &json!({"name": "x"}),
+                "write",
+                "manual",
+                "ask",
+                &p
+            ),
+            Decision::Ask { .. }
+        ));
+        // Plan mode blocks Write -> Deny.
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "web_hook_add",
+                &json!({"name": "x"}),
+                "plan",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Deny(_)
+        ));
+        // web_hook_delete is Destructive -> always Ask, even in Write + Auto.
+        assert!(matches!(
+            gate(
+                ToolCategory::Destructive,
+                "web_hook_delete",
+                &json!({"name": "x"}),
+                "write",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Ask { .. }
+        ));
+        // Plan mode blocks Destructive -> Deny.
+        assert!(matches!(
+            gate(
+                ToolCategory::Destructive,
+                "web_hook_delete",
+                &json!({"name": "x"}),
+                "plan",
+                "auto",
+                "auto",
+                &p
+            ),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn move_path_respects_edit_rules_and_toggle() {
+        let p = perms();
+        // move_path uses src/dst, not path. Previously the gate saw an empty
+        // path and unconditionally Allowed — bypassing deny rules + the toggle.
+        // .env* deny on dst -> Deny.
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "move_path",
+                &json!({"src": "a.txt", "dst": ".env"}),
+                "write",
+                "manual",
+                "auto",
+                &p
+            ),
+            Decision::Deny(_)
+        ));
+        // .env* deny on src -> Deny.
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "move_path",
+                &json!({"src": ".env", "dst": "b.txt"}),
+                "write",
+                "manual",
+                "auto",
+                &p
+            ),
+            Decision::Deny(_)
+        ));
+        // No deny rule, edit_toggle=ask -> Stage (was silently Allow before).
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "move_path",
+                &json!({"src": "a.txt", "dst": "b.txt"}),
+                "write",
+                "manual",
+                "ask",
+                &p
+            ),
+            Decision::Stage
+        ));
+        // No deny rule, edit_toggle=auto -> Allow.
+        assert!(matches!(
+            gate(
+                ToolCategory::Write,
+                "move_path",
+                &json!({"src": "a.txt", "dst": "b.txt"}),
+                "write",
+                "manual",
+                "auto",
+                &p
+            ),
+            Decision::Allow
+        ));
+    }
+
+    #[test]
     fn network_summary_carries_query_and_url() {
         let p = perms();
-        // web_search -> summary is the query, not the tool name.
+        // web_search -> summary is the query, not the tool name. Use Commands
+        // Manual so the gate still produces an Ask (Write + Auto now allows).
         let d = gate(
             ToolCategory::Network,
             "web_search",
             &json!({"query": "latest rust async news"}),
             "write",
-            "auto",
+            "manual",
             "auto",
             &p,
         );
@@ -444,7 +714,7 @@ mod tests {
             "web_fetch",
             &json!({"url": "https://example.com/page"}),
             "write",
-            "auto",
+            "manual",
             "auto",
             &p,
         );
@@ -461,7 +731,7 @@ mod tests {
             "some_net_tool",
             &json!({}),
             "write",
-            "auto",
+            "manual",
             "auto",
             &p,
         );
