@@ -162,7 +162,7 @@ edit_toggle = "ask"         # ask | auto
 # vision_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # System prompt: system_prompt.md (same dir).
 auto_collapse_context_pct = 90
-max_turns = 50              # max LLM tool-call round-trips per turn (built-in agent loop); raise for long multi-step tasks
+max_turns = 50              # max LLM tool-call round-trips per turn (built-in agent loop); 0 = unlimited; raise for long multi-step tasks
 disabled_tools = []          # builtin tool names hidden from the LLM (Settings → Tools)
 auto_pull_changes = true     # inject changed project files into context at turn start
 delete_to_trash = false      # delete_path: move to OS trash/recycle bin instead of permanent removal

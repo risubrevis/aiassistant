@@ -39,6 +39,8 @@
   let visionSaving = $state(false);
   let totalChunks = $state(0);
   let maxTurns = $state(50);
+  let mtUnlimited = $state(false);
+  let mtRestore = $state(50);
   let mtDirty = $state(false);
   let mtSaving = $state(false);
 
@@ -65,6 +67,8 @@
     ragEnabled = cfg.defaults.rag_enabled;
     visionEnabled = cfg.defaults.vision_model_enabled;
     maxTurns = cfg.defaults.max_turns ?? 50;
+    mtUnlimited = maxTurns === 0;
+    mtRestore = maxTurns === 0 ? 50 : maxTurns;
     lastEmbedding = embedding;
     lastRagEnabled = ragEnabled;
     lastVisionEnabled = visionEnabled;
@@ -270,6 +274,18 @@
     }
   }
 
+  function toggleMaxTurnsUnlimited(e: Event) {
+    const checked = (e.target as HTMLInputElement).checked;
+    mtUnlimited = checked;
+    if (checked) {
+      if (maxTurns !== 0) mtRestore = maxTurns;
+      maxTurns = 0;
+    } else {
+      maxTurns = mtRestore;
+    }
+    mtDirty = maxTurns !== lastMaxTurns;
+  }
+
   function onMaxTurnsInput(e: Event) {
     const v = Number((e.target as HTMLInputElement).value);
     maxTurns = v;
@@ -278,11 +294,13 @@
 
   function cancelMaxTurns() {
     maxTurns = lastMaxTurns;
+    mtUnlimited = maxTurns === 0;
     mtDirty = false;
   }
 
   async function saveMaxTurns() {
-    const v = Math.max(1, Math.min(1000, Math.floor(maxTurns)));
+    const raw = Math.floor(maxTurns);
+    const v = raw === 0 ? 0 : Math.max(1, Math.min(1000, raw));
     mtSaving = true;
     try {
       await setMaxTurns(v);
@@ -434,15 +452,26 @@
   <section class="block max-turns-section">
     <div class="field">
       <span class="label">{m.settings_models_max_turns()}</span>
-      <input
-        class="max-turns-input"
-        type="number"
-        min="1"
-        max="1000"
-        step="1"
-        value={maxTurns}
-        oninput={onMaxTurnsInput}
-      />
+      <div class="max-turns-row">
+        <input
+          class="max-turns-input"
+          type="number"
+          min="1"
+          max="1000"
+          step="1"
+          value={maxTurns}
+          disabled={mtUnlimited}
+          oninput={onMaxTurnsInput}
+        />
+        <div class="max-turns-unlimited">
+          <input
+            type="checkbox"
+            checked={mtUnlimited}
+            onchange={toggleMaxTurnsUnlimited}
+          />
+          <span>{m.settings_models_max_turns_unlimited()}</span>
+        </div>
+      </div>
       <p class="max-turns-hint">{m.settings_models_max_turns_hint()}</p>
     </div>
     <div class="actions">
@@ -534,6 +563,24 @@
     color: var(--foreground);
     font-size: 0.8125rem;
     font-variant-numeric: tabular-nums;
+  }
+  .max-turns-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .max-turns-unlimited {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8125rem;
+    cursor: default;
+  }
+  .max-turns-unlimited input {
+    width: 0.95rem;
+    height: 0.95rem;
+    cursor: default;
   }
   .max-turns-hint {
     margin: 0;

@@ -1575,7 +1575,12 @@ async fn run_turn(
         project_skills: project_skills.clone(),
     });
 
-    let max_iters = cfg.defaults.max_turns.max(1) as usize;
+    let unlimited = cfg.defaults.max_turns == 0;
+    let max_iters = if unlimited {
+        usize::MAX
+    } else {
+        cfg.defaults.max_turns.max(1) as usize
+    };
     let mut last_message_id = String::new();
     let mut last_usage: Option<crate::providers::Usage> = None;
     let mut last_finish = "stop".to_string();
@@ -2217,7 +2222,7 @@ async fn run_turn(
     // Loop exhausted max_turns without a clean stop: the model kept issuing
     // tool calls. message_done was already emitted with finish_reason
     // "tool_calls"; surface a visible error so the user knows why it stopped.
-    if !broke {
+    if !broke && !unlimited {
         warn!("chat turn hit max_turns limit ({max_iters}) for {chat_id}");
         let _ = app.emit(
             "chat:turn_error",

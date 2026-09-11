@@ -3360,8 +3360,8 @@ async fn set_max_turns(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    if !(1..=1000).contains(&value) {
-        return Err("max_turns must be 1..=1000".into());
+    if !(0..=1000).contains(&value) {
+        return Err("max_turns must be 0..=1000 (0 = unlimited)".into());
     }
     config::write_max_turns(value).map_err(|e| e.to_string())?;
     if let Ok(mut w) = state.config.write() {

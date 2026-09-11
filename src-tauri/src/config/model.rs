@@ -336,7 +336,7 @@ pub struct Defaults {
     /// Inject user-editable OS/environment info into the system prompt (plan/write modes).
     #[serde(default = "default_true")]
     pub add_environment_info: bool,
-    /// Max LLM tool-call round-trips per turn (built-in agent loop).
+    /// Max LLM tool-call round-trips per turn (built-in agent loop). 0 = unlimited.
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
     /// Auto-retry attempts for retryable provider/network errors during a stream
