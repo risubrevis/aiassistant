@@ -12,7 +12,7 @@ use crate::providers::{self, ChatMessage, CompleteEvent, CompleteRequest, Conten
 
 use super::{validate_read_path, Tool, ToolCategory, ToolResult, ToolSpec};
 
-fn schema(props: &[(&str, &str)], required: &[&str]) -> Value {
+pub(crate) fn schema(props: &[(&str, &str)], required: &[&str]) -> Value {
     let mut properties = serde_json::Map::new();
     for (k, ty) in props {
         properties.insert((*k).to_string(), serde_json::json!({ "type": *ty }));
@@ -24,7 +24,7 @@ fn schema(props: &[(&str, &str)], required: &[&str]) -> Value {
     })
 }
 
-fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
 }
 

@@ -1,4 +1,5 @@
 pub mod builtin;
+pub mod symbols;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -80,6 +81,7 @@ impl Registry {
             AskUser, FileInfo, Glob, Grep, ListDir, Memory, ReadChat, ReadFile, SearchProjectChats,
             TodoWrite, WebFetch, WebSearch,
         };
+        use symbols::ListSymbols;
         match mode {
             "minimal" => {}
             "plan" => {
@@ -87,6 +89,7 @@ impl Registry {
                 r.register(Box::new(ListDir));
                 r.register(Box::new(Glob));
                 r.register(Box::new(Grep));
+                r.register(Box::new(ListSymbols));
                 r.register(Box::new(FileInfo));
                 r.register(Box::new(WebFetch));
                 r.register(Box::new(WebSearch));
@@ -108,6 +111,7 @@ impl Registry {
                 r.register(Box::new(ListDir));
                 r.register(Box::new(Glob));
                 r.register(Box::new(Grep));
+                r.register(Box::new(ListSymbols));
                 r.register(Box::new(FileInfo));
                 r.register(Box::new(WebFetch));
                 r.register(Box::new(WebSearch));
@@ -190,10 +194,12 @@ pub fn builtin_all_specs() -> Vec<(String, String, String)> {
         WebFetch, WebHookAdd, WebHookDelete, WebHookList, WebHookModify, WebHookRun, WebSearch,
         WriteFile,
     };
+    use symbols::ListSymbols;
     r.register(Box::new(ReadFile));
     r.register(Box::new(ListDir));
     r.register(Box::new(Glob));
     r.register(Box::new(Grep));
+    r.register(Box::new(ListSymbols));
     r.register(Box::new(FileInfo));
     r.register(Box::new(WriteFile));
     r.register(Box::new(EditFile));
