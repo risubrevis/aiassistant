@@ -347,37 +347,36 @@ pub async fn link_chat(pool: &SqlitePool, task_id: &str, chat_id: &str) -> Resul
         .ok_or_else(|| anyhow::anyhow!("project task not found: {task_id}"))
 }
 
-/// On turn completion: if the chat is linked to a task currently in
-/// `in_progress`, move it to `review` (append to the review column + changelog).
-/// Returns the updated task + its project_id (for event emission), or None if
-/// no linked task is in progress (e.g. already in review/done, or no link).
-pub async fn finish_by_chat(
-    pool: &SqlitePool,
-    chat_id: &str,
-) -> Result<Option<(String, ProjectTask)>> {
-    let row = sqlx::query(&format!(
-        "SELECT {COLUMNS} FROM project_tasks WHERE chat_id = ?1 AND status = 'in_progress' LIMIT 1"
+/// On turn completion: move every task linked to this chat that is currently
+/// `in_progress` to `review` (append to the review column + changelog each).
+/// Returns the project_id if any task was moved, for event emission, or None
+/// when no linked task is in progress.
+pub async fn finish_by_chat(pool: &SqlitePool, chat_id: &str) -> Result<Option<String>> {
+    let rows = sqlx::query(&format!(
+        "SELECT {COLUMNS} FROM project_tasks WHERE chat_id = ?1 AND status = 'in_progress'"
     ))
     .bind(chat_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await?;
-    let Some(current) = row else { return Ok(None) };
-    let current = task_from_row(&current)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let project_id: String = rows[0].try_get("project_id")?;
     let now = now_ms();
     let mut tx = pool.begin().await?;
-    let position = append_to_column(&mut tx, &current, "review", now).await?;
-    sqlx::query(
-        "UPDATE project_tasks SET status = ?1, position = ?2, updated_at = ?3 WHERE id = ?4",
-    )
-    .bind("review")
-    .bind(position)
-    .bind(now)
-    .bind(&current.id)
-    .execute(&mut *tx)
-    .await?;
+    for row in &rows {
+        let task = task_from_row(row)?;
+        let position = append_to_column(&mut tx, &task, "review", now).await?;
+        sqlx::query(
+            "UPDATE project_tasks SET status = ?1, position = ?2, updated_at = ?3 WHERE id = ?4",
+        )
+        .bind("review")
+        .bind(position)
+        .bind(now)
+        .bind(&task.id)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
-    let updated = get(pool, &current.id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("project task not found: {}", current.id))?;
-    Ok(Some((updated.project_id.clone(), updated)))
+    Ok(Some(project_id))
 }

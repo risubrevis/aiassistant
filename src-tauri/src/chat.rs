@@ -2529,9 +2529,9 @@ async fn run_turn(
         });
     }
 
-    // A task linked to this chat has finished execution → move it to "review".
+    // Tasks linked to this chat have finished execution → move them to "review".
     match crate::db::project_tasks::finish_by_chat(&pool, &chat_id).await {
-        Ok(Some((project_id, _))) => {
+        Ok(Some(project_id)) => {
             let _ = app.emit(
                 "project_task_changed",
                 ProjectTaskChangedPayload { project_id },

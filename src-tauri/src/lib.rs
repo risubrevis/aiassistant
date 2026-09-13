@@ -1475,6 +1475,76 @@ async fn project_task_run(
         .ok_or_else(|| "chat not found after create".to_string())
 }
 
+#[tauri::command]
+async fn project_task_run_batch(
+    task_ids: Vec<String>,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Chat, String> {
+    if task_ids.is_empty() {
+        return Err("no tasks to run".to_string());
+    }
+    let first = db::project_tasks::get(&state.pool, &task_ids[0])
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "task not found".to_string())?;
+    let project_id = first.project_id.clone();
+    let cfg = state.config.read().unwrap().clone();
+    let chat = chat::create_project_chat(&state.pool, &cfg, &project_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mut sections: Vec<String> = Vec::with_capacity(task_ids.len());
+    for id in &task_ids {
+        match db::project_tasks::get(&state.pool, id).await {
+            Ok(Some(t)) => {
+                let body = if t.description.trim().is_empty() {
+                    t.title.clone()
+                } else {
+                    format!("# {}\n\n{}", t.title, t.description)
+                };
+                sections.push(body);
+                db::project_tasks::link_chat(&state.pool, id, &chat.id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok(None) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    let title = if sections.len() == 1 {
+        first.title.clone()
+    } else {
+        format!("{} tasks", sections.len())
+    };
+    db::models::rename_chat(&state.pool, &chat.id, &title, now_ms())
+        .await
+        .map_err(|e| e.to_string())?;
+    let text = sections.join("\n\n---\n\n");
+    chat::send(
+        app,
+        state.pool.clone(),
+        state.config.clone(),
+        state.active.clone(),
+        state.approvals.clone(),
+        state.mcp.clone(),
+        state.pending.clone(),
+        state.pty.clone(),
+        state.ask.clone(),
+        state.task_nudge.clone(),
+        state.runner.clone(),
+        state.changes.clone(),
+        state.inject.clone(),
+        chat.id.clone(),
+        text,
+        vec![],
+        vec![],
+    );
+    db::models::get_chat(&state.pool, &chat.id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "chat not found after create".to_string())
+}
+
 // --- prompts ---
 
 #[tauri::command]
@@ -3764,6 +3834,7 @@ pub fn run() {
             project_task_delete,
             project_task_move,
             project_task_run,
+            project_task_run_batch,
             prompt_list,
             prompt_list_favorites,
             prompt_create,

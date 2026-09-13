@@ -726,6 +726,8 @@ export const projectTaskDelete = (id: string) => invoke<void>("project_task_dele
 export const projectTaskMove = (id: string, toStatus: ProjectTaskStatus, toPosition: number) =>
   invoke<void>("project_task_move", { id, toStatus, toPosition });
 export const projectTaskRun = (id: string) => invoke<Chat>("project_task_run", { id });
+export const projectTaskRunBatch = (taskIds: string[]) =>
+  invoke<Chat>("project_task_run_batch", { taskIds });
 
 // --- prompts (reusable) ---
 export const promptList = () => invoke<Prompt[]>("prompt_list");

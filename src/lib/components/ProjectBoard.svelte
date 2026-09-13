@@ -2,22 +2,30 @@
   import KanbanBoard from "./KanbanBoard.svelte";
   import TaskListView from "./TaskListView.svelte";
   import TaskModal from "./TaskModal.svelte";
+  import RunAllModal from "./RunAllModal.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import { tasksByProject, loadProjectTasks, runProjectTask } from "$lib/stores/projectTasks";
+  import { batchRuns, startBatchRun, cancelBatchRun, type BatchMode } from "$lib/stores/projectTasksBatch";
   import { openChat } from "$lib/stores/chat";
   import { projects } from "$lib/stores/project";
   import { chatCancel } from "$lib/tauri";
   import { m } from "$lib/i18n";
   import type { ProjectTask } from "$lib/tauri";
-  import { Plus, SquareKanban, List } from "@lucide/svelte";
+  import { Plus, SquareKanban, List, Play, Square, LoaderCircle } from "@lucide/svelte";
 
   let { projectId }: { projectId: string } = $props();
 
   let viewMode = $state<"kanban" | "list">("kanban");
   let modalOpen = $state(false);
   let editingTask: ProjectTask | null = $state(null);
+  let runAllOpen = $state(false);
+  let stopConfirmOpen = $state(false);
 
   let tasks = $derived($tasksByProject[projectId] ?? []);
   let title = $derived($projects.find((p) => p.id === projectId)?.name || m.board_title());
+  let todoTasks = $derived(tasks.filter((t) => t.status === "todo").sort((a, b) => a.position - b.position));
+  let batchRun = $derived($batchRuns[projectId]);
+  let batchActive = $derived(!!batchRun?.active);
 
   $effect(() => {
     void loadProjectTasks(projectId);
@@ -49,6 +57,24 @@
   async function onopenchat(chatId: string) {
     await openChat(chatId);
   }
+
+  function onRunAll(mode: BatchMode) {
+    runAllOpen = false;
+    void startBatchRun(projectId, mode);
+  }
+
+  function onClickRunAll() {
+    if (batchActive) {
+      stopConfirmOpen = true;
+    } else {
+      runAllOpen = true;
+    }
+  }
+
+  function onConfirmStop() {
+    stopConfirmOpen = false;
+    void cancelBatchRun(projectId);
+  }
 </script>
 
 <div class="wrap">
@@ -64,6 +90,22 @@
         <span>{m.board_view_list()}</span>
       </button>
     </div>
+    <button
+      class="runall"
+      class:active={batchActive}
+      disabled={!batchActive && todoTasks.length === 0}
+      onclick={onClickRunAll}
+      title={batchActive ? m.board_run_all_stop() : m.board_run_all_title()}
+    >
+      {#if batchActive}
+        <LoaderCircle size={13} class="spin" />
+        <Square size={12} class="stop-ico" />
+        <span>{m.board_run_all_stop()}</span>
+      {:else}
+        <Play size={13} />
+        <span>{m.board_run_all()}</span>
+      {/if}
+    </button>
     <button class="add" onclick={onAddTask}>
       <Plus size={13} />
       <span>{m.board_add_task()}</span>
@@ -86,6 +128,15 @@
   </div>
 </div>
 <TaskModal open={modalOpen} {projectId} task={editingTask} onclose={() => (modalOpen = false)} />
+<RunAllModal open={runAllOpen} todoCount={todoTasks.length} onrun={onRunAll} onclose={() => (runAllOpen = false)} />
+<ConfirmDialog
+  open={stopConfirmOpen}
+  message={m.board_run_all_stop_confirm()}
+  confirmLabel={m.board_run_all_stop()}
+  variant="danger"
+  onconfirm={onConfirmStop}
+  oncancel={() => (stopConfirmOpen = false)}
+/>
 
 <style>
   .wrap {
@@ -148,6 +199,41 @@
   }
   .add:hover {
     background: var(--accent);
+  }
+  .runall {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    flex-shrink: 0;
+    padding: 0.25rem 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--foreground);
+    font-size: 0.72rem;
+    cursor: pointer;
+  }
+  .runall:hover:not(:disabled) {
+    background: var(--accent);
+  }
+  .runall:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .runall.active {
+    border-color: var(--destructive);
+    color: var(--destructive);
+  }
+  .runall :global(.stop-ico) {
+    color: var(--destructive);
+  }
+  .runall :global(.spin) {
+    animation: runall-spin 1s linear infinite;
+  }
+  @keyframes runall-spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .boardarea {
     display: flex;
