@@ -528,7 +528,7 @@
     {/if}
   </div>
 
-  <div class="flex-1 overflow-y-auto px-2 py-1">
+  <div class="sidebar-scroll flex-1 overflow-y-auto px-2 py-1">
     {#if $projects.length > 0}
       <div class="section-head px-1 pt-3 pb-1">
         <span class="label">{m.sidebar_projects()}</span>
@@ -764,6 +764,9 @@
 </aside>
 
 <style>
+  .sidebar-scroll {
+    scrollbar-gutter: stable;
+  }
   .sidebar-btn-primary {
     display: inline-flex;
     align-items: center;
