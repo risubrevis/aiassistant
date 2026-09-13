@@ -49,12 +49,14 @@
 
   type Prefs = {
     sendOnEnter: boolean;
+    sendImmediately: boolean;
     notificationsEnabled: boolean;
     rememberWindow: boolean;
   };
 
   let draft = $state<Prefs>({
     sendOnEnter: true,
+    sendImmediately: false,
     notificationsEnabled: true,
     rememberWindow: true,
   });
@@ -68,6 +70,7 @@
     if (!g) return null;
     return {
       sendOnEnter: g.send_on_enter,
+      sendImmediately: g.send_immediately,
       notificationsEnabled: g.notifications_enabled,
       rememberWindow: g.remember_window_state,
     } satisfies Prefs;
@@ -78,6 +81,7 @@
     if (!s) return false;
     return (
       draft.sendOnEnter !== s.sendOnEnter ||
+      draft.sendImmediately !== s.sendImmediately ||
       draft.notificationsEnabled !== s.notificationsEnabled ||
       draft.rememberWindow !== s.rememberWindow
     );
@@ -105,6 +109,7 @@
     saving = true;
     try {
       await ipc.setSendOnEnter(draft.sendOnEnter);
+      await ipc.setSendImmediately(draft.sendImmediately);
       await ipc.setNotificationsEnabled(draft.notificationsEnabled);
       await ipc.setRememberWindowState(draft.rememberWindow);
       userEdited = false;
@@ -260,6 +265,11 @@
         "sendOnEnter",
         m.settings_general_send_on_enter(),
         m.settings_general_send_on_enter_hint(),
+      )}
+      {@render prefRow(
+        "sendImmediately",
+        m.settings_general_send_immediately(),
+        m.settings_general_send_immediately_hint(),
       )}
       {@render prefRow(
         "notificationsEnabled",

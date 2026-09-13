@@ -31,6 +31,16 @@ use crate::tools::Registry as ToolRegistry;
 /// Map of chat_id -> running turn task handle, for cancellation (docs/18).
 pub type ActiveTurns = Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>;
 
+/// Per-chat senders for injecting user messages into a running turn.
+pub type InjectRegistry = Arc<Mutex<HashMap<String, mpsc::Sender<InjectedMessage>>>>;
+
+/// A user message injected mid-turn (sent while the model was already generating).
+pub struct InjectedMessage {
+    pub text: String,
+    pub attachment_ids: Vec<String>,
+    pub skill_ids: Vec<String>,
+}
+
 /// Turns since the last todo_write per chat; drives the stale-open-task nudge.
 /// In-memory only, resets on app restart.
 #[derive(Clone, Default)]
@@ -927,6 +937,7 @@ pub fn send(
     task_nudge: TaskNudge,
     runner: AgentRunner,
     changes: projects::ChangeTracker,
+    inject: InjectRegistry,
     chat_id: String,
     text: String,
     attachment_ids: Vec<String>,
@@ -935,8 +946,14 @@ pub fn send(
     let app2 = app.clone();
     let key = chat_id.clone();
     let active_c = active.clone();
+    let inject_c = inject.clone();
+    let (inject_tx, inject_rx) = mpsc::channel::<InjectedMessage>(16);
+    {
+        let mut reg = inject.lock().unwrap();
+        reg.insert(key.clone(), inject_tx);
+    }
     let handle = tauri::async_runtime::spawn(async move {
-        if let Err(e) = start_turn(
+        let result = start_turn(
             app2.clone(),
             pool,
             config,
@@ -954,9 +971,13 @@ pub fn send(
             attachment_ids,
             skill_ids,
             TurnKind::Send,
+            inject_rx,
         )
-        .await
-        {
+        .await;
+        if let Ok(mut reg) = inject_c.lock() {
+            reg.remove(&chat_id);
+        }
+        if let Err(e) = result {
             error!("chat turn failed: {e:#}");
             emit_status(&app2, &chat_id, ChatStatus::Error, Some(e.to_string()));
         }
@@ -980,14 +1001,21 @@ pub fn regenerate(
     task_nudge: TaskNudge,
     runner: AgentRunner,
     changes: projects::ChangeTracker,
+    inject: InjectRegistry,
     chat_id: String,
     from_message_id: String,
 ) {
     let app2 = app.clone();
     let key = chat_id.clone();
     let active_c = active.clone();
+    let inject_c = inject.clone();
+    let (inject_tx, inject_rx) = mpsc::channel::<InjectedMessage>(16);
+    {
+        let mut reg = inject.lock().unwrap();
+        reg.insert(key.clone(), inject_tx);
+    }
     let handle = tauri::async_runtime::spawn(async move {
-        if let Err(e) = start_turn(
+        let result = start_turn(
             app2.clone(),
             pool,
             config,
@@ -1005,9 +1033,13 @@ pub fn regenerate(
             Vec::new(),
             Vec::new(),
             TurnKind::Regenerate,
+            inject_rx,
         )
-        .await
-        {
+        .await;
+        if let Ok(mut reg) = inject_c.lock() {
+            reg.remove(&chat_id);
+        }
+        if let Err(e) = result {
             error!("regenerate failed: {e:#}");
             emit_status(&app2, &chat_id, ChatStatus::Error, Some(e.to_string()));
         }
@@ -1032,6 +1064,7 @@ pub fn edit_message(
     task_nudge: TaskNudge,
     runner: AgentRunner,
     changes: projects::ChangeTracker,
+    inject: InjectRegistry,
     chat_id: String,
     message_id: String,
     new_text: String,
@@ -1039,8 +1072,14 @@ pub fn edit_message(
     let app2 = app.clone();
     let key = chat_id.clone();
     let active_c = active.clone();
+    let inject_c = inject.clone();
+    let (inject_tx, inject_rx) = mpsc::channel::<InjectedMessage>(16);
+    {
+        let mut reg = inject.lock().unwrap();
+        reg.insert(key.clone(), inject_tx);
+    }
     let handle = tauri::async_runtime::spawn(async move {
-        if let Err(e) = start_turn(
+        let result = start_turn(
             app2.clone(),
             pool,
             config,
@@ -1058,9 +1097,13 @@ pub fn edit_message(
             Vec::new(),
             Vec::new(),
             TurnKind::Edit(new_text),
+            inject_rx,
         )
-        .await
-        {
+        .await;
+        if let Ok(mut reg) = inject_c.lock() {
+            reg.remove(&chat_id);
+        }
+        if let Err(e) = result {
             error!("edit+rerun failed: {e:#}");
             emit_status(&app2, &chat_id, ChatStatus::Error, Some(e.to_string()));
         }
@@ -1112,6 +1155,56 @@ async fn compose_with_skills(pool: &SqlitePool, skill_ids: &[String], user_text:
     )
 }
 
+/// Persist an injected user message, append it to the working conversation, and
+/// emit `chat:user_message` so the frontend swaps its optimistic local id.
+async fn process_injection(
+    app: &AppHandle,
+    pool: &SqlitePool,
+    chat_id: &str,
+    project_id: Option<&str>,
+    msg: InjectedMessage,
+    current_parent: &mut String,
+    work: &mut Vec<ChatMessage>,
+) -> anyhow::Result<()> {
+    let expanded = projects::expand_refs(pool, project_id, chat_id, &msg.text).await;
+    let content = compose_with_skills(pool, &msg.skill_ids, &expanded).await;
+    let user_id = Uuid::new_v4().to_string();
+    let user_msg = Message {
+        id: user_id.clone(),
+        chat_id: chat_id.to_string(),
+        parent_id: Some(current_parent.clone()),
+        role: "user".into(),
+        content: content.clone(),
+        content_parts: None,
+        model: None,
+        usage: None,
+        thinking_ms: None,
+        finish_reason: None,
+        is_branch_root: 0,
+        created_at: now_ms(),
+    };
+    models::insert_message(pool, &user_msg, now_ms()).await?;
+    models::touch_chat(pool, chat_id, now_ms()).await?;
+    if !msg.attachment_ids.is_empty() {
+        if let Err(e) = attachments::link_to_message(pool, &msg.attachment_ids, &user_id).await {
+            warn!("failed to link attachments for injected message: {e:#}");
+        }
+    }
+    let _ = app.emit(
+        "chat:user_message",
+        serde_json::json!({ "chat_id": chat_id, "message_id": user_id }),
+    );
+    *current_parent = user_id;
+    work.push(ChatMessage {
+        role: "user".into(),
+        content,
+        tool_call_id: None,
+        tool_calls: None,
+        parts: None,
+    });
+    Ok(())
+}
+
 /// Set up the turn: insert/locate the user message, set the active leaf, then
 /// run the assistant generation loop from that leaf.
 #[allow(clippy::too_many_arguments)]
@@ -1133,6 +1226,7 @@ async fn start_turn(
     attachment_ids: Vec<String>,
     skill_ids: Vec<String>,
     kind: TurnKind,
+    inject_rx: mpsc::Receiver<InjectedMessage>,
 ) -> anyhow::Result<()> {
     let chat = models::get_chat(&pool, &chat_id)
         .await?
@@ -1220,7 +1314,7 @@ async fn start_turn(
 
     run_turn(
         app, pool, config, active, approvals, mcp, pending, pty, ask, task_nudge, runner, changes,
-        chat_id, leaf_id,
+        chat_id, leaf_id, inject_rx,
     )
     .await
 }
@@ -1249,6 +1343,7 @@ async fn run_turn(
     changes: projects::ChangeTracker,
     chat_id: String,
     leaf_id: String,
+    mut inject_rx: mpsc::Receiver<InjectedMessage>,
 ) -> anyhow::Result<()> {
     let chat = models::get_chat(&pool, &chat_id)
         .await?
@@ -1589,7 +1684,21 @@ async fn run_turn(
     let mut current_parent: String = leaf_id.clone();
 
     let mut broke = false;
+    let mut pending_injection: Option<InjectedMessage> = None;
     for iter in 0..max_iters {
+        // Drain injected messages that arrived between iterations.
+        while let Ok(msg) = inject_rx.try_recv() {
+            process_injection(
+                &app,
+                &pool,
+                &chat_id,
+                chat.project_id.as_deref(),
+                msg,
+                &mut current_parent,
+                &mut work,
+            )
+            .await?;
+        }
         let assistant_id = Uuid::new_v4().to_string();
         last_message_id = assistant_id.clone();
 
@@ -1621,6 +1730,7 @@ async fn run_turn(
         let mut thinking_ms: i64 = 0;
         let mut finish_reason = "stop".to_string();
         let mut usage: Option<crate::providers::Usage> = None;
+        let mut interrupted = false;
 
         loop {
             if retry > 0 {
@@ -1663,7 +1773,20 @@ async fn run_turn(
                 })
             };
 
-            while let Some(ev) = rx.recv().await {
+            loop {
+                let ev = tokio::select! {
+                    ev = rx.recv() => ev,
+                    msg = inject_rx.recv() => {
+                        if let Some(m) = msg {
+                            pending_injection = Some(m);
+                        }
+                        interrupted = true;
+                        break;
+                    }
+                };
+                let Some(ev) = ev else {
+                    break;
+                };
                 match ev {
                     CompleteEvent::BlockStart {
                         block_id,
@@ -1745,6 +1868,16 @@ async fn run_turn(
                     }
                 }
             }
+            if interrupted {
+                // Stop the provider stream promptly: `rx` is no longer drained,
+                // so the stream task would otherwise block on a full channel.
+                stream_task.abort();
+                let _ = stream_task.await;
+                // Clear any error from a previous retry attempt so it doesn't
+                // short-circuit the interrupted path below.
+                stream_err = None;
+                break;
+            }
             let _ = stream_task.await;
             let err = stream_err_slot.lock().ok().and_then(|mut g| g.take());
             match err {
@@ -1765,52 +1898,65 @@ async fn run_turn(
             }
         }
 
+        // Skip persisting an empty assistant message when the turn was
+        // interrupted before any content arrived (e.g. during a retry backoff).
+        // Avoids creating an empty bubble in the UI.
+        let skip_empty =
+            interrupted && text_acc.is_empty() && thinking_acc.is_empty() && block_kind.is_empty();
+        if interrupted && !skip_empty {
+            finish_reason = "interrupted".to_string();
+        }
+
         // Persist the assistant message for this iteration (text + tool_use blocks).
-        let mut blocks_arr: Vec<serde_json::Value> = Vec::new();
-        if !thinking_acc.is_empty() {
-            blocks_arr.push(serde_json::json!({
-                "id": format!("{}-thinking", &assistant_id),
-                "type": "thinking",
-                "text": thinking_acc,
-            }));
+        if !skip_empty {
+            let mut blocks_arr: Vec<serde_json::Value> = Vec::new();
+            if !thinking_acc.is_empty() {
+                blocks_arr.push(serde_json::json!({
+                    "id": format!("{}-thinking", &assistant_id),
+                    "type": "thinking",
+                    "text": thinking_acc,
+                }));
+            }
+            if !text_acc.is_empty() {
+                blocks_arr.push(serde_json::json!({
+                    "id": format!("{}-text", &assistant_id),
+                    "type": "text",
+                    "text": text_acc,
+                }));
+            }
+            if !interrupted {
+                for tc in &tool_calls {
+                    blocks_arr.push(serde_json::json!({
+                        "id": tc.block_id,
+                        "type": "tool_use",
+                        "name": tc.name,
+                        "tool_call_id": tc.id,
+                        "input": tc.args,
+                    }));
+                }
+            }
+            let parts = serde_json::to_string(&serde_json::json!({ "blocks": blocks_arr }))?;
+            let assistant_msg = Message {
+                id: assistant_id.clone(),
+                chat_id: chat_id.clone(),
+                parent_id: Some(current_parent.clone()),
+                role: "assistant".into(),
+                content: text_acc.clone(),
+                content_parts: Some(parts),
+                model: Some(model.clone()),
+                usage: usage
+                    .as_ref()
+                    .map(|u| serde_json::to_string(u).unwrap_or_default()),
+                thinking_ms: Some(thinking_ms),
+                finish_reason: Some(finish_reason.clone()),
+                is_branch_root: 0,
+                created_at: now_ms(),
+            };
+            models::insert_message(&pool, &assistant_msg, now_ms()).await?;
+            models::touch_chat(&pool, &chat_id, now_ms()).await?;
+            current_parent = assistant_id.clone();
+            last_assistant_text = text_acc.clone();
         }
-        if !text_acc.is_empty() {
-            blocks_arr.push(serde_json::json!({
-                "id": format!("{}-text", &assistant_id),
-                "type": "text",
-                "text": text_acc,
-            }));
-        }
-        for tc in &tool_calls {
-            blocks_arr.push(serde_json::json!({
-                "id": tc.block_id,
-                "type": "tool_use",
-                "name": tc.name,
-                "tool_call_id": tc.id,
-                "input": tc.args,
-            }));
-        }
-        let parts = serde_json::to_string(&serde_json::json!({ "blocks": blocks_arr }))?;
-        let assistant_msg = Message {
-            id: assistant_id.clone(),
-            chat_id: chat_id.clone(),
-            parent_id: Some(current_parent.clone()),
-            role: "assistant".into(),
-            content: text_acc.clone(),
-            content_parts: Some(parts),
-            model: Some(model.clone()),
-            usage: usage
-                .as_ref()
-                .map(|u| serde_json::to_string(u).unwrap_or_default()),
-            thinking_ms: Some(thinking_ms),
-            finish_reason: Some(finish_reason.clone()),
-            is_branch_root: 0,
-            created_at: now_ms(),
-        };
-        models::insert_message(&pool, &assistant_msg, now_ms()).await?;
-        models::touch_chat(&pool, &chat_id, now_ms()).await?;
-        current_parent = assistant_id.clone();
-        last_assistant_text = text_acc.clone();
 
         if let Some(err) = stream_err {
             let kind = err.kind_str().to_string();
@@ -1846,6 +1992,58 @@ async fn run_turn(
             return Ok(());
         }
 
+        if interrupted {
+            if !skip_empty {
+                // Emit message_done for the partial assistant message so the UI
+                // finalizes it (clears streaming flag, updates content).
+                let _ = app.emit(
+                    "chat:message_done",
+                    MessageDonePayload {
+                        chat_id: chat_id.clone(),
+                        message_id: assistant_id.clone(),
+                        usage: usage.clone(),
+                        finish_reason: "interrupted".into(),
+                    },
+                );
+                // Append the partial assistant text to work (no tool calls).
+                work.push(ChatMessage {
+                    role: "assistant".into(),
+                    content: text_acc.clone(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    parts: None,
+                });
+            }
+            // Process the injection that triggered the interrupt.
+            if let Some(msg) = pending_injection.take() {
+                process_injection(
+                    &app,
+                    &pool,
+                    &chat_id,
+                    chat.project_id.as_deref(),
+                    msg,
+                    &mut current_parent,
+                    &mut work,
+                )
+                .await?;
+            }
+            // Drain any additional injections.
+            while let Ok(msg) = inject_rx.try_recv() {
+                process_injection(
+                    &app,
+                    &pool,
+                    &chat_id,
+                    chat.project_id.as_deref(),
+                    msg,
+                    &mut current_parent,
+                    &mut work,
+                )
+                .await?;
+            }
+            warn!("chat turn interrupted by user injection at iter {iter} for {chat_id}");
+            continue;
+        }
+
         // Append this assistant message to the working conversation.
         let tool_calls_out: Vec<ToolCall> = tool_calls
             .iter()
@@ -1873,7 +2071,28 @@ async fn run_turn(
         last_usage = usage.clone();
         last_finish = finish_reason.clone();
 
+        // Drain injections that arrived after the stream ended but before the
+        // turn could end. If any are pending, don't break — let the next
+        // iteration respond to them so the user's message isn't lost.
+        let mut had_injection = false;
+        while let Ok(msg) = inject_rx.try_recv() {
+            had_injection = true;
+            process_injection(
+                &app,
+                &pool,
+                &chat_id,
+                chat.project_id.as_deref(),
+                msg,
+                &mut current_parent,
+                &mut work,
+            )
+            .await?;
+        }
+
         if finish_reason != "tool_calls" || tool_calls.is_empty() {
+            if had_injection {
+                continue;
+            }
             broke = true;
             break;
         }

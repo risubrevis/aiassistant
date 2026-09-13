@@ -63,6 +63,7 @@ struct AppState {
     pending: PendingManager,
     pty: PtyManager,
     pending_settings_tab: Mutex<Option<String>>,
+    inject: chat::InjectRegistry,
 }
 
 #[derive(Serialize)]
@@ -149,10 +150,28 @@ fn set_theme(theme: String, state: State<AppState>, app: AppHandle) -> Result<()
 }
 
 #[tauri::command]
-fn set_send_on_enter(value: bool, state: State<AppState>, app: AppHandle) -> Result<(), String> {
+fn set_send_on_enter(
+    value: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
     config::write_send_on_enter(value).map_err(|e| e.to_string())?;
     if let Ok(mut w) = state.config.write() {
         w.general.send_on_enter = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_send_immediately(
+    value: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    config::write_send_immediately(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.general.send_immediately = value;
     }
     app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
     Ok(())
@@ -722,12 +741,32 @@ async fn chat_set_system_prompt(
 #[tauri::command]
 fn chat_send(
     chat_id: String,
-    text: String,
-    attachment_ids: Vec<String>,
-    skill_ids: Vec<String>,
+    mut text: String,
+    mut attachment_ids: Vec<String>,
+    mut skill_ids: Vec<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) {
+    // If a turn is already running for this chat, inject the message into it
+    // instead of starting a new (conflicting) turn.
+    let inject_tx = state.inject.lock().unwrap().get(&chat_id).cloned();
+    if let Some(tx) = inject_tx {
+        let msg = chat::InjectedMessage {
+            text,
+            attachment_ids,
+            skill_ids,
+        };
+        match tx.try_send(msg) {
+            Ok(()) => return,
+            Err(tokio::sync::mpsc::error::TrySendError::Full(m))
+            | Err(tokio::sync::mpsc::error::TrySendError::Closed(m)) => {
+                // Channel full or closed — fall through to start a new turn.
+                text = m.text;
+                attachment_ids = m.attachment_ids;
+                skill_ids = m.skill_ids;
+            }
+        }
+    }
     chat::send(
         app,
         state.pool.clone(),
@@ -741,6 +780,7 @@ fn chat_send(
         state.task_nudge.clone(),
         state.runner.clone(),
         state.changes.clone(),
+        state.inject.clone(),
         chat_id,
         text,
         attachment_ids,
@@ -845,6 +885,7 @@ fn chat_regenerate(
         state.task_nudge.clone(),
         state.runner.clone(),
         state.changes.clone(),
+        state.inject.clone(),
         chat_id,
         message_id,
     );
@@ -871,6 +912,7 @@ fn chat_edit_message(
         state.task_nudge.clone(),
         state.runner.clone(),
         state.changes.clone(),
+        state.inject.clone(),
         chat_id,
         message_id,
         new_text,
@@ -1421,6 +1463,7 @@ async fn project_task_run(
         state.task_nudge.clone(),
         state.runner.clone(),
         state.changes.clone(),
+        state.inject.clone(),
         chat.id.clone(),
         text,
         vec![],
@@ -1696,6 +1739,7 @@ async fn prompt_run(
             state.task_nudge.clone(),
             state.runner.clone(),
             state.changes.clone(),
+            state.inject.clone(),
             chat.id.clone(),
             text,
             attachment_ids,
@@ -2967,6 +3011,7 @@ fn pty_input(session_id: String, data: String, state: State<'_, AppState>) -> Re
 
 #[tauri::command]
 fn chat_cancel(chat_id: String, state: State<'_, AppState>, app: AppHandle) {
+    state.inject.lock().unwrap().remove(&chat_id);
     chat::cancel(app, state.active.clone(), chat_id);
 }
 
@@ -3627,6 +3672,7 @@ pub fn run() {
                 pending: PendingManager::new(),
                 pty: PtyManager::new(),
                 pending_settings_tab: Mutex::new(None),
+                inject: Arc::new(Mutex::new(HashMap::new())),
             });
 
             // Restart watchers for all existing projects on startup.
@@ -3657,6 +3703,7 @@ pub fn run() {
             set_log_level,
             set_theme,
             set_send_on_enter,
+            set_send_immediately,
             set_notifications_enabled,
             set_remember_window_state,
             set_network,

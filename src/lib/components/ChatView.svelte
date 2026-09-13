@@ -2,7 +2,7 @@
   import { onMount, tick, untrack } from "svelte";
   import { get } from "svelte/store";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
-  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking, setChatMode, setChatCommandToggle, setChatEditToggle, chatRightPanel, setChatRightPanel } from "$lib/stores/chat";
+  import { messagesByChat, statusByChat, generateMarkdown, saveMarkdownContent, sessionsByChat, compactChat, setChatThinking, setChatMode, setChatCommandToggle, setChatEditToggle, chatRightPanel, setChatRightPanel, sendMessage, queuedMessagesByChat, removeQueuedMessage } from "$lib/stores/chat";
   import type { UiMessage } from "$lib/stores/chat";
   import { config as configStore } from "$lib/stores/config";
   import { projects } from "$lib/stores/project";
@@ -10,7 +10,7 @@
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
-  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X, TerminalSquare } from "@lucide/svelte";
+  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X, Pencil, TerminalSquare } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
   import AssistantTurn from "./AssistantTurn.svelte";
@@ -31,7 +31,7 @@
     agentInfoModalOpen,
     refreshAgentAvailability,
   } from "$lib/stores/agents";
-  import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT } from "$lib/events";
+  import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT, COMPOSER_RESTORE_EVENT } from "$lib/events";
   import { tasksByChat, tasksModalChatId, openTasksModal, closeTasksModal, taskCounts } from "$lib/stores/tasks";
   import { DEFAULT_RIGHT, clampRight } from "$lib/stores/layout";
   import { termStatusByChat, reconstructFromMessages } from "$lib/stores/terminal";
@@ -116,6 +116,7 @@
   } | null>(null);
   let status = $derived($statusByChat[chat.id] ?? "idle");
   let running = $derived(status === "running");
+  let queue = $derived($queuedMessagesByChat[chat.id] ?? []);
   let modelSelected = $derived(Boolean(chat.model_id));
   const ACTIVE_RUN_STATUSES = new Set(["queued", "running"]);
   let agentRunningInChat = $derived(
@@ -302,6 +303,33 @@
     if (e.key === "Escape") confirmOpen = false;
   }
 
+  // Auto-send queued messages when the turn completes (queue mode).
+  $effect(() => {
+    if (status !== "idle" || !modelSelected) return;
+    const q = $queuedMessagesByChat[chat.id] ?? [];
+    if (q.length === 0) return;
+    const next = q[0];
+    removeQueuedMessage(chat.id, next.id);
+    void sendMessage(next.text, next.attachmentIds, next.skillIds);
+  });
+
+  function editQueued(chatId: string, itemId: string) {
+    const q = $queuedMessagesByChat[chatId] ?? [];
+    const item = q.find((x) => x.id === itemId);
+    if (!item) return;
+    removeQueuedMessage(chatId, itemId);
+    window.dispatchEvent(
+      new CustomEvent(COMPOSER_RESTORE_EVENT, {
+        detail: {
+          text: item.text,
+          attachmentIds: item.attachmentIds,
+          skillIds: item.skillIds,
+          chatId,
+        },
+      }),
+    );
+  }
+
   async function doExport() {
     if (exporting) return;
     exporting = true;
@@ -445,6 +473,36 @@
     {/if}
     <div class="composer-area">
       <InteractionOverlay chatId={chat.id} />
+      {#if queue.length > 0}
+        <div class="queue-area">
+          <div class="queue-header">
+            <span class="queue-title">{m.composer_queued_messages()}</span>
+            <span class="queue-hint">{m.composer_queued_hint()}</span>
+          </div>
+          {#each queue as item, i (item.id)}
+            <div class="queue-item">
+              <span class="queue-pos">{i + 1}</span>
+              <span class="queue-text">{item.text}</span>
+              <div class="queue-actions">
+                <button
+                  class="queue-btn"
+                  title={m.common_edit()}
+                  onclick={() => editQueued(chat.id, item.id)}
+                >
+                  <Pencil size={12} />
+                </button>
+                <button
+                  class="queue-btn"
+                  title={m.composer_queued_remove()}
+                  onclick={() => removeQueuedMessage(chat.id, item.id)}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
       <Composer running={running} inProject={!!project} modelSelected={modelSelected}>
       <button
         class="ag-btn {agentRunningInChat ? "running" : ""}"
@@ -633,6 +691,77 @@
   }
   .composer-area {
     position: relative;
+  }
+  .queue-area {
+    padding: 6px 12px 2px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  .queue-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .queue-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .queue-hint {
+    font-size: 11px;
+    color: var(--muted-foreground);
+    opacity: 0.7;
+  }
+  .queue-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .queue-pos {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted-foreground);
+    min-width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+  }
+  .queue-text {
+    font-size: 13px;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .queue-actions {
+    display: flex;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .queue-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--muted-foreground);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .queue-btn:hover {
+    background: var(--accent);
+    color: var(--foreground);
   }
   .drop-overlay {
     position: absolute;

@@ -53,6 +53,7 @@ export interface GeneralConfig {
   send_on_enter: boolean;
   notifications_enabled: boolean;
   remember_window_state: boolean;
+  send_immediately: boolean;
 }
 
 export interface AppConfig {
@@ -544,6 +545,8 @@ export const setNotificationsEnabled = (value: boolean) =>
   invoke<void>("set_notifications_enabled", { value });
 export const setRememberWindowState = (value: boolean) =>
   invoke<void>("set_remember_window_state", { value });
+export const setSendImmediately = (value: boolean) =>
+  invoke<void>("set_send_immediately", { value });
 export const clearCache = () => invoke<number>("clear_cache");
 export const resetApp = () => invoke<void>("reset_app");
 

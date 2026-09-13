@@ -13,12 +13,12 @@
   import { get } from "svelte/store";
   import { tick, type Snippet } from "svelte";
   import { m } from "$lib/i18n";
-  import { sendMessage, cancelTurn, currentChatId } from "$lib/stores/chat";
+  import { sendMessage, cancelTurn, currentChatId, enqueueMessage } from "$lib/stores/chat";
   import { config } from "$lib/stores/config";
   import { skills as skillsStore } from "$lib/stores/skills";
   import { pendingTemplatePayload } from "$lib/stores/prompts";
-  import { attachmentAdd, attachmentRemove, attachmentReadDataUrl, type Attachment, type Skill } from "$lib/tauri";
-  import { COMPOSER_SEND_EVENT, FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT, COMPOSER_INSERT_EVENT } from "$lib/events";
+  import { attachmentAdd, attachmentRemove, attachmentReadDataUrl, attachmentsForChat, type Attachment, type Skill } from "$lib/tauri";
+  import { COMPOSER_SEND_EVENT, FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT, COMPOSER_INSERT_EVENT, COMPOSER_RESTORE_EVENT } from "$lib/events";
   import { formatSize } from "$lib/utils";
 
   let { running = false, inProject = false, modelSelected = true, children }: {
@@ -40,6 +40,7 @@
   let placeholder = $derived(inProject ? m.composer_hint_project() : m.composer_placeholder());
   let canSend = $derived((Boolean(text.trim()) || pending.length > 0) && modelSelected);
   let sendOnEnter = $derived($config?.general?.send_on_enter ?? true);
+  let sendImmediately = $derived($config?.general?.send_immediately ?? false);
   let availableSkills = $derived<Skill[]>($skillsStore);
   let selectedSkills = $derived(
     selectedSkillIds
@@ -156,7 +157,7 @@
   }
 
   function submit() {
-    if (running || !modelSelected) return;
+    if (!modelSelected) return;
     const t = text.trim();
     const ids = [...pending.map((a) => a.id)];
     const sIds = [...selectedSkillIds];
@@ -166,7 +167,16 @@
     thumbCache = {};
     selectedSkillIds = [];
     skillsOpen = false;
-    void sendMessage(t, ids, sIds);
+    if (running) {
+      if (sendImmediately) {
+        void sendMessage(t, ids, sIds);
+      } else {
+        const chatId = get(currentChatId);
+        if (chatId) enqueueMessage(chatId, t, ids, sIds);
+      }
+    } else {
+      void sendMessage(t, ids, sIds);
+    }
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -224,6 +234,57 @@
     window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   });
+
+  // Restore a queued message into the composer (edit).
+  $effect(() => {
+    const onRestore = (e: Event) => {
+      const detail = (e as CustomEvent<{
+        text: string;
+        attachmentIds: string[];
+        skillIds: string[];
+        chatId: string;
+      }>).detail;
+      if (!detail) return;
+      text = detail.text;
+      selectedSkillIds = [...detail.skillIds];
+      void restoreAttachments(detail.chatId, detail.attachmentIds);
+      void tick().then(() => {
+        textareaEl?.focus();
+        if (textareaEl) {
+          textareaEl.selectionStart = textareaEl.selectionEnd = textareaEl.value.length;
+        }
+        autoResize();
+      });
+    };
+    window.addEventListener(COMPOSER_RESTORE_EVENT, onRestore);
+    return () => window.removeEventListener(COMPOSER_RESTORE_EVENT, onRestore);
+  });
+
+  async function restoreAttachments(chatId: string, attachmentIds: string[]) {
+    if (attachmentIds.length === 0) {
+      pending = [];
+      thumbCache = {};
+      return;
+    }
+    try {
+      const allAtts = await attachmentsForChat(chatId);
+      const restored = allAtts.filter((a) => attachmentIds.includes(a.id));
+      pending = restored;
+      thumbCache = {};
+      for (const att of restored) {
+        if (att.is_image) {
+          try {
+            const url = await attachmentReadDataUrl(att.id);
+            thumbCache = { ...thumbCache, [att.id]: url };
+          } catch (e) {
+            console.error("attachmentReadDataUrl failed", e);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("restoreAttachments failed", e);
+    }
+  }
 </script>
 
 <div class="composer">
@@ -341,6 +402,11 @@
     <div class="composer-right">
       {@render children?.()}
       {#if running}
+        {#if canSend}
+          <button class="btn send" title={m.composer_send()} onclick={submit}>
+            <ArrowUp size={16} />
+          </button>
+        {/if}
         <button class="btn stop" title={m.composer_stop()} onclick={cancelTurn}>
           <Square size={14} />
         </button>

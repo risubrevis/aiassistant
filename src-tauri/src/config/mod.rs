@@ -21,7 +21,8 @@ pub use write::{
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
     write_environment_info, write_logging_field, write_mode, write_network,
     write_notifications_enabled, write_rag_enabled, write_remember_window_state,
-    write_send_on_enter, write_system_prompt, write_vision_model_enabled, write_web_search,
+    write_send_immediately, write_send_on_enter, write_system_prompt, write_vision_model_enabled,
+    write_web_search,
 };
 
 /// App config directory: `config_dir/aiassistant` per-OS (XDG/AppData/Library).
@@ -148,6 +149,7 @@ compact = false
 send_on_enter = true         # Enter sends a message, Shift+Enter for a new line. false = Enter inserts a newline (send via Cmd/Ctrl+Enter hotkey).
 notifications_enabled = true # desktop notification when a response / agent task completes
 remember_window_state = true # restore window size & position on launch
+send_immediately = false    # true = new messages sent while the model is working interrupt and inject into the running turn. false = messages are queued by the frontend and sent after the turn completes.
 
 [defaults]
 mode = "plan"               # minimal | plan | write

@@ -273,6 +273,8 @@ pub struct General {
     pub notifications_enabled: bool,
     #[serde(default = "default_true")]
     pub remember_window_state: bool,
+    #[serde(default)]
+    pub send_immediately: bool,
 }
 
 impl Default for General {
@@ -281,6 +283,7 @@ impl Default for General {
             send_on_enter: true,
             notifications_enabled: true,
             remember_window_state: true,
+            send_immediately: false,
         }
     }
 }

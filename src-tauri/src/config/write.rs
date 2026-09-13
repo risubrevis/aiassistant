@@ -151,6 +151,13 @@ pub fn write_remember_window_state(value: bool) -> Result<()> {
     write_doc(doc)
 }
 
+/// Set `[general].send_immediately` (inject new messages into a running turn instead of queueing).
+pub fn write_send_immediately(value: bool) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["general"]["send_immediately"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
 /// Set `[defaults].rag_enabled` (master switch for RAG / embedding retrieval).
 pub fn write_rag_enabled(value: bool) -> Result<()> {
     let mut doc = load_doc()?;

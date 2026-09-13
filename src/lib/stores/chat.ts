@@ -59,6 +59,45 @@ export interface StreamRetry {
 }
 export const streamRetryByMessage = writable<Record<string, StreamRetry>>({});
 
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  attachmentIds: string[];
+  skillIds: string[];
+  createdAt: number;
+}
+export const queuedMessagesByChat = writable<Record<string, QueuedMessage[]>>({});
+
+export function enqueueMessage(chatId: string, text: string, attachmentIds: string[], skillIds: string[]): void {
+  const item: QueuedMessage = {
+    id: crypto.randomUUID(),
+    text,
+    attachmentIds,
+    skillIds,
+    createdAt: Date.now(),
+  };
+  queuedMessagesByChat.update((m) => ({
+    ...m,
+    [chatId]: [...(m[chatId] ?? []), item],
+  }));
+}
+
+export function removeQueuedMessage(chatId: string, itemId: string): void {
+  queuedMessagesByChat.update((m) => {
+    const list = m[chatId] ?? [];
+    const next = list.filter((q) => q.id !== itemId);
+    return { ...m, [chatId]: next };
+  });
+}
+
+export function clearQueuedMessages(chatId: string): void {
+  queuedMessagesByChat.update((m) => {
+    const next = { ...m };
+    delete next[chatId];
+    return next;
+  });
+}
+
 export type ChatSortMode = "updated" | "created" | "alpha" | "manual";
 export const chatSortMode = writable<ChatSortMode>(
   typeof localStorage !== "undefined"
@@ -255,6 +294,7 @@ export async function deleteChat(id: string) {
     return next;
   });
   tasksStore.clearTasks(id);
+  clearQueuedMessages(id);
   loaded.delete(id);
   if (get(currentChatId) === id) currentChatId.set(null);
   // Refresh the project's chat list and Kanban board: the deleted chat must

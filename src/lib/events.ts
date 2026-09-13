@@ -9,3 +9,5 @@ export const FOCUS_COMPOSER_EVENT = "aiassistant:focus-composer";
 export const DROP_FILES_EVENT = "aiassistant:drop-files";
 
 export const COMPOSER_INSERT_EVENT = "aiassistant:composer-insert";
+
+export const COMPOSER_RESTORE_EVENT = "aiassistant:composer-restore";
