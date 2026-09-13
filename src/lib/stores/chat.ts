@@ -71,6 +71,24 @@ chatSortMode.subscribe((v) => {
   } catch {}
 });
 
+export type ChatArchiveFilter = "all" | "active" | "archived";
+export const chatArchiveFilter = writable<ChatArchiveFilter>(
+  typeof localStorage !== "undefined"
+    ? ((localStorage.getItem("aiassistant.chatArchiveFilter") as ChatArchiveFilter | null) ?? "active")
+    : "active",
+);
+chatArchiveFilter.subscribe((v) => {
+  try {
+    localStorage.setItem("aiassistant.chatArchiveFilter", v);
+  } catch {}
+});
+
+export function matchesArchiveFilter(chat: Chat, filter: ChatArchiveFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "active") return chat.archived === 0;
+  return chat.archived === 1;
+}
+
 export function sortChats(list: Chat[], mode: ChatSortMode): Chat[] {
   const pinnedFirst = (a: Chat, b: Chat) => b.pinned - a.pinned;
   const cmp: (a: Chat, b: Chat) => number =
@@ -274,6 +292,24 @@ export async function toggleChatPinned(id: string, pinned: boolean) {
     });
   } catch (e) {
     console.error("chatSetPinned failed", e);
+  }
+}
+
+export async function setChatArchived(id: string, archived: boolean) {
+  try {
+    await ipc.chatSetArchived(id, archived);
+    const val = archived ? 1 : 0;
+    chats.update((list) => list.map((c) => (c.id === id ? { ...c, archived: val } : c)));
+    projectChats.update((m) => {
+      const next = { ...m };
+      for (const pid of Object.keys(next)) {
+        next[pid] = next[pid].map((c) => (c.id === id ? { ...c, archived: val } : c));
+      }
+      return next;
+    });
+    toast.success(archived ? m.chat_archived() : m.chat_unarchived());
+  } catch (e) {
+    console.error("chatSetArchived failed", e);
   }
 }
 

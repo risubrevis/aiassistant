@@ -609,6 +609,8 @@ export const activityDayDetail = (date: string) =>
   invoke<DayDetail>("activity_day_detail", { date });
 export const chatSetPinned = (chatId: string, pinned: boolean) =>
   invoke<void>("chat_set_pinned", { chatId, pinned });
+export const chatSetArchived = (chatId: string, archived: boolean) =>
+  invoke<void>("chat_set_archived", { chatId, archived });
 export const chatReorder = (orderedIds: string[]) =>
   invoke<void>("chat_reorder", { orderedIds });
 

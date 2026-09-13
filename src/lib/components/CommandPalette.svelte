@@ -110,7 +110,7 @@
         action: () => openSettingsTab(tab),
       });
     }
-    for (const c of $chats.slice(0, 10)) {
+    for (const c of $chats.filter((c) => !c.archived).slice(0, 10)) {
       list.push({
         id: `recent:${c.id}`,
         label: c.title,

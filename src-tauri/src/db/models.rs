@@ -235,7 +235,7 @@ pub async fn create_chat(
 pub async fn list_chats(pool: &SqlitePool) -> Result<Vec<ChatSummary>> {
     let chats = sqlx::query_as::<_, ChatSummary>(
         "SELECT id, project_id, title, provider_id, model_id, pinned, archived, settings, meta, \
-         sort_order, created_at, updated_at FROM chats WHERE archived = 0 \
+         sort_order, created_at, updated_at FROM chats \
          ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
     )
     .fetch_all(pool)
@@ -246,7 +246,7 @@ pub async fn list_chats(pool: &SqlitePool) -> Result<Vec<ChatSummary>> {
 pub async fn list_project_chats(pool: &SqlitePool, project_id: &str) -> Result<Vec<ChatSummary>> {
     let chats = sqlx::query_as::<_, ChatSummary>(
         "SELECT id, project_id, title, provider_id, model_id, pinned, archived, settings, meta, \
-         sort_order, created_at, updated_at FROM chats WHERE project_id = ?1 AND archived = 0 \
+         sort_order, created_at, updated_at FROM chats WHERE project_id = ?1 \
          ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
     )
     .bind(project_id)
@@ -441,6 +441,21 @@ pub async fn delete_chat(pool: &SqlitePool, id: &str) -> Result<()> {
 pub async fn set_chat_pinned(pool: &SqlitePool, id: &str, pinned: bool, now: i64) -> Result<()> {
     sqlx::query("UPDATE chats SET pinned = ?1, updated_at = ?2 WHERE id = ?3")
         .bind(pinned as i64)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_chat_archived(
+    pool: &SqlitePool,
+    id: &str,
+    archived: bool,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE chats SET archived = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(archived as i64)
         .bind(now)
         .bind(id)
         .execute(pool)

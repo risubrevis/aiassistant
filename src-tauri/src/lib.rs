@@ -546,6 +546,17 @@ async fn chat_set_pinned(
 }
 
 #[tauri::command]
+async fn chat_set_archived(
+    chat_id: String,
+    archived: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_chat_archived(&state.pool, &chat_id, archived, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn chat_reorder(ordered_ids: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
     db::models::reorder_chats(&state.pool, &ordered_ids)
         .await
@@ -3668,6 +3679,7 @@ pub fn run() {
             activity_daily,
             activity_day_detail,
             chat_set_pinned,
+            chat_set_archived,
             chat_reorder,
             chat_set_model,
             chat_set_thinking,

@@ -1,5 +1,7 @@
 <script lang="ts">
   import {
+    Archive,
+    ArchiveRestore,
     Brain,
     Plus,
     Search,
@@ -34,7 +36,11 @@
     reorderChats,
     chatSortMode,
     sortChats,
+    chatArchiveFilter,
+    matchesArchiveFilter,
+    setChatArchived,
     type ChatSortMode,
+    type ChatArchiveFilter,
   } from "$lib/stores/chat";
   import {
     projects,
@@ -51,7 +57,9 @@
     reorderProjects,
     projectSortMode,
     sortProjects,
+    projectChatArchiveFilter,
     type ProjectSortMode,
+    type ProjectChatArchiveFilter,
   } from "$lib/stores/project";
   import * as ipc from "$lib/tauri";
   import type { Chat, ChatStatus, FtsHit, Project } from "$lib/tauri";
@@ -76,6 +84,7 @@
   let confirmDelete = $state<{ kind: "chat" | "project"; id: string; name: string } | null>(null);
   let deleting = $state(false);
   let createProjectOpen = $state(false);
+  let confirmArchive = $state<{ id: string; archived: boolean; title: string } | null>(null);
 
   let dragId = $state<string | null>(null);
   let dragOverId = $state<string | null>(null);
@@ -101,7 +110,9 @@
     return s ?? "idle";
   }
 
-  let standaloneChats = $derived($chats.filter((c) => !c.project_id));
+  let standaloneChats = $derived(
+    $chats.filter((c) => !c.project_id && matchesArchiveFilter(c, $chatArchiveFilter)),
+  );
 
   $effect(() => {
     const q = query.trim();
@@ -132,6 +143,21 @@
 
   let listChats = $derived(sortChats(titleFiltered, $chatSortMode));
   let listProjects = $derived(sortProjects($projects, $projectSortMode));
+
+  // FTS message search respects the archive filter: a hit is only shown when
+  // its chat is visible under the filter that applies to it (standalone vs.
+  // project). $chats holds every chat with its archived flag, so lookups cover
+  // both scopes.
+  let visibleFtsResults = $derived(
+    ftsResults.filter((hit) => {
+      const chat = $chats.find((c) => c.id === hit.chat_id);
+      if (!chat) return true;
+      return matchesArchiveFilter(
+        chat,
+        chat.project_id ? $projectChatArchiveFilter : $chatArchiveFilter,
+      );
+    }),
+  );
 
   function onCreateProject() {
     createProjectOpen = true;
@@ -196,6 +222,20 @@
     projectSortMode.set(value as ProjectSortMode);
   }
 
+  const archiveItems = [
+    { value: "all", label: m.sidebar_filter_all() },
+    { value: "active", label: m.sidebar_filter_active() },
+    { value: "archived", label: m.sidebar_filter_archived() },
+  ];
+
+  function setChatArchiveFilter(value: string) {
+    chatArchiveFilter.set(value as ChatArchiveFilter);
+  }
+
+  function setProjectChatArchiveFilter(value: string) {
+    projectChatArchiveFilter.set(value as ProjectChatArchiveFilter);
+  }
+
   function openCtx(e: MouseEvent, items: ContextMenuItem[]) {
     e.preventDefault();
     e.stopPropagation();
@@ -220,6 +260,13 @@
         label: m.ctx_chat_memory(),
         icon: Brain,
         onclick: () => openChatMemory(c.id),
+      },
+      {
+        label: c.archived ? m.ctx_unarchive() : m.ctx_archive(),
+        icon: c.archived ? ArchiveRestore : Archive,
+        onclick: () => {
+          confirmArchive = { id: c.id, archived: !c.archived, title: c.title };
+        },
       },
       { label: "", separator: true },
       {
@@ -300,6 +347,13 @@
     } finally {
       deleting = false;
     }
+  }
+
+  async function onConfirmArchive() {
+    const target = confirmArchive;
+    if (!target) return;
+    confirmArchive = null;
+    await setChatArchived(target.id, target.archived);
   }
 
   function onDragStart(e: DragEvent, id: string) {
@@ -453,17 +507,17 @@
         placeholder={m.sidebar_search()}
         spellcheck="false"
       />
-      {#if ftsOpen && (ftsResults.length || query.trim())}
+      {#if ftsOpen && (visibleFtsResults.length || query.trim())}
         <button class="search-close" onclick={closeSearch}>×</button>
       {/if}
     </div>
     {#if ftsOpen}
       <div class="fts-dropdown">
         <div class="fts-head">{m.search_results()}</div>
-        {#if ftsResults.length === 0}
+        {#if visibleFtsResults.length === 0}
           <div class="fts-empty">{m.search_no_results()}</div>
         {:else}
-          {#each ftsResults as hit (hit.message_id)}
+          {#each visibleFtsResults as hit (hit.message_id)}
             <button class="fts-row" onclick={() => openHit(hit)}>
               <span class="fts-snippet">{hit.snippet}</span>
               <span class="fts-meta">{$chats.find((c) => c.id === hit.chat_id)?.title ?? hit.chat_id}</span>
@@ -478,13 +532,22 @@
     {#if $projects.length > 0}
       <div class="section-head px-1 pt-3 pb-1">
         <span class="label">{m.sidebar_projects()}</span>
-        <Select
-          class="sort-select"
-          value={$projectSortMode}
-          items={sortItems}
-          onchange={setProjectSort}
-          title={m.sidebar_sort_label()}
-        />
+        <div class="section-controls">
+          <Select
+            class="filter-select"
+            value={$projectChatArchiveFilter}
+            items={archiveItems}
+            onchange={setProjectChatArchiveFilter}
+            title={m.sidebar_filter_label()}
+          />
+          <Select
+            class="sort-select"
+            value={$projectSortMode}
+            items={sortItems}
+            onchange={setProjectSort}
+            title={m.sidebar_sort_label()}
+          />
+        </div>
       </div>
       {#each listProjects as p (p.id)}
         <div class="project-row">
@@ -533,7 +596,7 @@
           </div>
           {#if expanded[p.id]}
             <div class="project-chats">
-              {#each sortChats($projectChats[p.id] ?? [], $chatSortMode) as c (c.id)}
+              {#each sortChats(($projectChats[p.id] ?? []).filter((c) => matchesArchiveFilter(c, $projectChatArchiveFilter)), $chatSortMode) as c (c.id)}
                 <div
                   class="chat-row sub"
                   class:active={$currentChatId === c.id}
@@ -550,7 +613,7 @@
                   oncontextmenu={(e) => openCtx(e, chatMenuItems(c))}
                 >
                   <span class="dot {statusClass($statusByChat[c.id])}"></span>
-                  <span class="title">{c.title}</span>
+                  <span class="title" class:archived={c.archived}>{c.title}</span>
                   <Star
                     size={13}
                     class={c.pinned ? "star filled" : "star"}
@@ -570,7 +633,7 @@
                   </button>
                 </div>
               {/each}
-              {#if ($projectChats[p.id] ?? []).length === 0}
+              {#if (($projectChats[p.id] ?? []).filter((c) => matchesArchiveFilter(c, $projectChatArchiveFilter))).length === 0}
                 <div class="sub-empty">{m.sidebar_no_chats()}</div>
               {/if}
             </div>
@@ -581,13 +644,22 @@
 
     <div class="section-head px-3 pt-1 pb-1">
       <span class="label">{m.sidebar_chats()}</span>
-      <Select
-        class="sort-select"
-        value={$chatSortMode}
-        items={sortItems}
-        onchange={setChatSort}
-        title={m.sidebar_sort_label()}
-      />
+      <div class="section-controls">
+        <Select
+          class="filter-select"
+          value={$chatArchiveFilter}
+          items={archiveItems}
+          onchange={setChatArchiveFilter}
+          title={m.sidebar_filter_label()}
+        />
+        <Select
+          class="sort-select"
+          value={$chatSortMode}
+          items={sortItems}
+          onchange={setChatSort}
+          title={m.sidebar_sort_label()}
+        />
+      </div>
     </div>
 
     {#each listChats as c (c.id)}
@@ -607,7 +679,7 @@
         oncontextmenu={(e) => openCtx(e, chatMenuItems(c))}
       >
         <span class="dot {statusClass($statusByChat[c.id])}"></span>
-        <span class="title">{c.title}</span>
+        <span class="title" class:archived={c.archived}>{c.title}</span>
         <Star
           size={13}
           class={c.pinned ? "star filled" : "star"}
@@ -675,6 +747,15 @@
     loadingLabel={m.common_deleting()}
     onconfirm={() => void onConfirmDelete()}
     oncancel={() => (confirmDelete = null)}
+  />
+
+  <ConfirmDialog
+    open={confirmArchive !== null}
+    message={confirmArchive?.archived ? m.chat_archive_confirm() : m.chat_unarchive_confirm()}
+    confirmLabel={confirmArchive?.archived ? m.common_archive() : m.common_restore()}
+    variant="primary"
+    onconfirm={onConfirmArchive}
+    oncancel={() => (confirmArchive = null)}
   />
 
   <ProjectRulesModal />
@@ -817,6 +898,21 @@
     --sel-hover-background: var(--accent);
     --sel-hover-color: var(--foreground);
   }
+  .section-head .section-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+  .section-head :global(.filter-select) {
+    --sel-height: 1.4rem;
+    --sel-max-width: 7rem;
+    --sel-font-size: 0.66rem;
+    --sel-radius: var(--radius-sm);
+    --sel-background: var(--secondary);
+    --sel-color: var(--muted-foreground);
+    --sel-hover-background: var(--accent);
+    --sel-hover-color: var(--foreground);
+  }
   .chat-row {
     display: flex;
     align-items: center;
@@ -850,6 +946,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .chat-row .title.archived {
+    color: var(--muted-foreground);
   }
   .chat-row :global(svg.star) {
     display: none;

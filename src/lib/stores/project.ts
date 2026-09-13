@@ -33,6 +33,18 @@ projectSortMode.subscribe((v) => {
   } catch {}
 });
 
+export type ProjectChatArchiveFilter = "all" | "active" | "archived";
+export const projectChatArchiveFilter = writable<ProjectChatArchiveFilter>(
+  typeof localStorage !== "undefined"
+    ? ((localStorage.getItem("aiassistant.projectChatArchiveFilter") as ProjectChatArchiveFilter | null) ?? "active")
+    : "active",
+);
+projectChatArchiveFilter.subscribe((v) => {
+  try {
+    localStorage.setItem("aiassistant.projectChatArchiveFilter", v);
+  } catch {}
+});
+
 export function sortProjects(list: Project[], mode: ProjectSortMode): Project[] {
   const pinnedFirst = (a: Project, b: Project) => b.pinned - a.pinned;
   const cmp: (a: Project, b: Project) => number =
