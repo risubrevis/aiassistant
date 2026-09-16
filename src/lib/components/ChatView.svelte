@@ -10,7 +10,7 @@
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
   import { renderMarkdown } from "$lib/markdown";
-  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X, Pencil, TerminalSquare } from "@lucide/svelte";
+  import { Bot, Download, FileText, Info, ScrollText, ListTodo, ChevronDown, ChevronRight, LoaderCircle, Sparkles, PanelRight, PanelRightOpen, Lightbulb, LightbulbOff, X, Pencil, TerminalSquare, ArrowDown } from "@lucide/svelte";
   import ModelSelector from "./ModelSelector.svelte";
   import MessageItem from "./MessageItem.svelte";
   import AssistantTurn from "./AssistantTurn.svelte";
@@ -31,7 +31,7 @@
     agentInfoModalOpen,
     refreshAgentAvailability,
   } from "$lib/stores/agents";
-  import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT, COMPOSER_RESTORE_EVENT } from "$lib/events";
+  import { FOCUS_COMPOSER_EVENT, DROP_FILES_EVENT, COMPOSER_RESTORE_EVENT, COMPOSER_SEND_EVENT } from "$lib/events";
   import { tasksByChat, tasksModalChatId, openTasksModal, closeTasksModal, taskCounts } from "$lib/stores/tasks";
   import { DEFAULT_RIGHT, clampRight } from "$lib/stores/layout";
   import { termStatusByChat, reconstructFromMessages } from "$lib/stores/terminal";
@@ -44,6 +44,9 @@
   let dragOver = $state(false);
 
   let scrollRaf: number | null = null;
+
+  let stickToBottom = $state(true);
+  let messagesEl: HTMLDivElement | undefined = $state();
 
   onMount(async () => {
     try {
@@ -74,7 +77,12 @@
       })
       .then((u) => (unlisten = u))
       .catch((e) => console.error("onDragDropEvent failed", e));
-    return () => unlisten?.();
+    const onSend = () => { stickToBottom = true; };
+    window.addEventListener(COMPOSER_SEND_EVENT, onSend);
+    return () => {
+      unlisten?.();
+      window.removeEventListener(COMPOSER_SEND_EVENT, onSend);
+    };
   });
 
   let messages = $derived(($messagesByChat[chat.id] ?? []) as UiMessage[]);
@@ -284,6 +292,17 @@
     return renderMarkdown(summary);
   }
 
+  function onMessagesScroll() {
+    const el = messagesEl;
+    if (!el) return;
+    stickToBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
+  }
+
+  function scrollToBottom() {
+    stickToBottom = true;
+    bottomEl?.scrollIntoView({ behavior: "smooth" });
+  }
+
   function askCompact() {
     if (compacting || running || messages.length === 0) return;
     confirmOpen = true;
@@ -365,6 +384,7 @@
   $effect(() => {
     void messages;
     void compactionResult;
+    if (!stickToBottom) return;
     if (scrollRaf !== null) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = null;
@@ -388,6 +408,7 @@
       }
       compactionResult = null;
       confirmOpen = false;
+      stickToBottom = true;
     }
     lastChatId = id;
   });
@@ -441,7 +462,7 @@
       </button>
     </header>
 
-    <div class="messages flex-1 overflow-y-auto px-4 py-2">
+    <div class="messages flex-1 overflow-y-auto px-4 py-2" bind:this={messagesEl} onscroll={onMessagesScroll}>
       {#if latestSession}
         <div class="compaction-banner">
           <button class="cb-head" onclick={() => (summaryOpen = !summaryOpen)}>
@@ -488,6 +509,11 @@
         <div class="empty">{m.sidebar_no_chats()}</div>
       {/if}
       <div bind:this={bottomEl}></div>
+      {#if !stickToBottom && messages.length > 0}
+        <button class="scroll-bottom-btn" onclick={scrollToBottom} title="Scroll to bottom">
+          <ArrowDown size={16} />
+        </button>
+      {/if}
     </div>
 
     {#if $agentsPanelOpen}
@@ -789,6 +815,31 @@
   .queue-btn:hover {
     background: var(--accent);
     color: var(--foreground);
+  }
+  .scroll-bottom-btn {
+    position: sticky;
+    bottom: 0.5rem;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--background);
+    color: var(--muted-foreground);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    transition: color 0.15s, border-color 0.15s;
+    z-index: 10;
+    margin: -32px auto 0;
+    pointer-events: auto;
+  }
+  .scroll-bottom-btn:hover {
+    color: var(--foreground);
+    border-color: var(--muted-foreground);
   }
   .drop-overlay {
     position: absolute;
