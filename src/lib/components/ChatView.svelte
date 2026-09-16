@@ -47,6 +47,8 @@
 
   let stickToBottom = $state(true);
   let messagesEl: HTMLDivElement | undefined = $state();
+  let suppressScroll = false;
+  let lastUserScroll = 0;
 
   onMount(async () => {
     try {
@@ -293,9 +295,11 @@
   }
 
   function onMessagesScroll() {
+    if (suppressScroll) return;
     const el = messagesEl;
     if (!el) return;
-    stickToBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 48;
+    stickToBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 16;
+    lastUserScroll = performance.now();
   }
 
   function scrollToBottom() {
@@ -388,9 +392,24 @@
     if (scrollRaf !== null) return;
     scrollRaf = requestAnimationFrame(() => {
       scrollRaf = null;
-      void tick().then(() =>
-        bottomEl?.scrollIntoView({ behavior: running ? "auto" : "smooth" }),
-      );
+      // Re-check stickToBottom inside rAF: the user may have scrolled up
+      // between the effect scheduling this callback and it firing.
+      if (!stickToBottom) return;
+      // Don't auto-scroll while the user is actively scrolling — wait for
+      // them to stop (200ms grace period) to avoid fighting their input.
+      if (performance.now() - lastUserScroll < 200) return;
+      if (running) {
+        const el = messagesEl;
+        if (el) {
+          // Suppress the onscroll handler so the programmatic scroll
+          // doesn't reset stickToBottom.
+          suppressScroll = true;
+          el.scrollTop = el.scrollHeight;
+          setTimeout(() => { suppressScroll = false; }, 0);
+        }
+      } else {
+        bottomEl?.scrollIntoView({ behavior: "smooth" });
+      }
     });
   });
 
