@@ -2484,6 +2484,33 @@ async fn project_set_include_global_rules(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn project_set_include_global_system_prompt(
+    project_id: String,
+    include: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_project_include_global_system_prompt(
+        &state.pool,
+        &project_id,
+        include,
+        now_ms(),
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn project_set_system_prompt(
+    project_id: String,
+    system_prompt: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::models::set_project_system_prompt(&state.pool, &project_id, &system_prompt, now_ms())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // --- FTS search ---
 
 #[tauri::command]
@@ -3890,6 +3917,8 @@ pub fn run() {
             project_rule_set_active,
             project_rule_reorder,
             project_set_include_global_rules,
+            project_set_include_global_system_prompt,
+            project_set_system_prompt,
             web_search_providers_list,
             web_search_providers_save,
             web_search_provider_set_key,

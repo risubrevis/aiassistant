@@ -4,10 +4,16 @@ use crate::config::{environment_path, Config};
 use crate::db::models::{self, Chat, Project};
 
 /// Assemble the effective system prompt for a chat turn (docs/08):
-///   [base prompt: project overrides global] + [chat prompt]
+///   [base prompt] + [chat prompt]
 ///   + [Environment info, for plan/write modes]
 ///   + [Rules: global / project]
 ///   + [cross-chat sibling summaries, if hybrid/summary].
+///
+/// Base prompt: with the project's `include_global_system_prompt` on (default)
+/// the global system prompt (Settings -> Prompts) is prepended and the project
+/// prompt supplements it; with the flag off the project prompt fully replaces
+/// the global one and no environment-info block is added. Projectless chats
+/// always use the global prompt + env info per global settings.
 pub async fn effective_system_prompt(
     pool: &SqlitePool,
     config: &Config,
@@ -17,18 +23,18 @@ pub async fn effective_system_prompt(
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
 
-    // Base prompt: project overrides global when non-empty.
-    let base = project
-        .and_then(|p| {
-            if !p.system_prompt.is_empty() {
-                Some(&p.system_prompt)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(&config.defaults.system_prompt);
-    if !base.is_empty() {
-        parts.push(base.clone());
+    // Base prompt: a project's include_global_system_prompt flag decides whether
+    // the global system prompt (Settings -> Prompts) is prepended. With the flag
+    // on (default) the project prompt supplements the global one; with it off the
+    // project prompt fully replaces it. Projectless chats always use the global.
+    let include_global_sys = project.map_or(true, |p| p.include_global_system_prompt != 0);
+    if include_global_sys && !config.defaults.system_prompt.is_empty() {
+        parts.push(config.defaults.system_prompt.clone());
+    }
+    if let Some(p) = project {
+        if !p.system_prompt.is_empty() {
+            parts.push(p.system_prompt.clone());
+        }
     }
     if let Some(sp) = chat.system_prompt.as_ref() {
         if !sp.is_empty() {
@@ -58,7 +64,10 @@ pub async fn effective_system_prompt(
 
     // Environment info helps the model pick correct shell commands and paths
     // when it may write files or run commands (plan/write modes only).
-    if (mode == "plan" || mode == "write") && config.defaults.add_environment_info {
+    if (mode == "plan" || mode == "write")
+        && config.defaults.add_environment_info
+        && include_global_sys
+    {
         parts.push(environment_info_block(pool, project).await);
     }
 

@@ -21,6 +21,13 @@ export function openProjectRules(id: string) {
   projectRulesOpen.set(true);
 }
 
+export const projectSystemPromptOpen = writable(false);
+export const projectSystemPromptId = writable<string | null>(null);
+export function openProjectSystemPrompt(id: string) {
+  projectSystemPromptId.set(id);
+  projectSystemPromptOpen.set(true);
+}
+
 export type ProjectSortMode = "updated" | "created" | "alpha" | "manual";
 export const projectSortMode = writable<ProjectSortMode>(
   typeof localStorage !== "undefined"

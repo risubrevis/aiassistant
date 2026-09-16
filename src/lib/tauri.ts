@@ -201,6 +201,7 @@ export interface Project {
   pinned: number;
   sort_order: number;
   include_global_rules: number;
+  include_global_system_prompt: number;
   created_at: number;
   updated_at: number;
 }
@@ -808,6 +809,10 @@ export const projectRuleReorder = (projectId: string, orderedIds: string[]) =>
   invoke<void>("project_rule_reorder", { projectId, orderedIds });
 export const projectSetIncludeGlobalRules = (projectId: string, include: boolean) =>
   invoke<void>("project_set_include_global_rules", { projectId, include });
+export const projectSetIncludeGlobalSystemPrompt = (projectId: string, include: boolean) =>
+  invoke<void>("project_set_include_global_system_prompt", { projectId, include });
+export const projectSetSystemPrompt = (projectId: string, systemPrompt: string) =>
+  invoke<void>("project_set_system_prompt", { projectId, systemPrompt });
 
 export const memoryListChat = (chatId: string) =>
   invoke<Memory[]>("memory_list_chat", { chatId });

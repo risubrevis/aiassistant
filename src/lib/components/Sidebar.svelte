@@ -14,6 +14,7 @@
     Pencil,
     Settings,
     ScrollText,
+    FileText,
   } from "@lucide/svelte";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
@@ -21,6 +22,7 @@
   import RenameModal from "./RenameModal.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import ProjectRulesModal from "./ProjectRulesModal.svelte";
+  import ProjectSystemPromptModal from "./ProjectSystemPromptModal.svelte";
   import MemoryModal from "./MemoryModal.svelte";
   import Select from "./Select.svelte";
   import {
@@ -51,6 +53,7 @@
     openProject,
     openProjectSettings,
     openProjectRules,
+    openProjectSystemPrompt,
     deleteProject,
     renameProject,
     toggleProjectPinned,
@@ -293,6 +296,11 @@
         onclick: () => {
           renameTarget = { kind: "project", id: p.id, name: p.name };
         },
+      },
+      {
+        label: m.ctx_project_system_prompt(),
+        icon: FileText,
+        onclick: () => openProjectSystemPrompt(p.id),
       },
       {
         label: m.ctx_project_rules(),
@@ -759,6 +767,8 @@
   />
 
   <ProjectRulesModal />
+
+  <ProjectSystemPromptModal />
 
   <MemoryModal />
 </aside>

@@ -17,7 +17,6 @@
   let name = $state("");
   let color = $state("#6366f1");
   let description = $state("");
-  let systemPrompt = $state("");
   let crossChat = $state("off");
   let ragChunks = $state(0);
   let ragBusy = $state(false);
@@ -72,7 +71,6 @@
       name = project.name;
       color = project.color || "#6366f1";
       description = project.description;
-      systemPrompt = project.system_prompt;
       try {
         const s = project.settings ? JSON.parse(project.settings) : {};
         crossChat = s.cross_chat ?? "off";
@@ -96,7 +94,7 @@
       name,
       color,
       description,
-      system_prompt: systemPrompt,
+      system_prompt: project.system_prompt,
       default_provider_id: null,
       default_model_id: null,
       settings,
@@ -214,11 +212,6 @@
           <label class="field">
             <span class="lbl">{m.project_description()}</span>
             <textarea bind:value={description} rows="2"></textarea>
-          </label>
-
-          <label class="field">
-            <span class="lbl">{m.project_system_prompt()}</span>
-            <textarea bind:value={systemPrompt} rows="4"></textarea>
           </label>
 
           <div class="field">

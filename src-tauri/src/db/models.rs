@@ -71,6 +71,7 @@ pub struct Project {
     pub pinned: i64,
     pub sort_order: i64,
     pub include_global_rules: i64,
+    pub include_global_system_prompt: i64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -613,6 +614,7 @@ pub async fn create_project(
         pinned: 0,
         sort_order: 0,
         include_global_rules: 1,
+        include_global_system_prompt: 1,
         created_at: now,
         updated_at: now,
     })
@@ -621,7 +623,8 @@ pub async fn create_project(
 pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>> {
     let projects = sqlx::query_as::<_, Project>(
         "SELECT id, name, description, system_prompt, default_provider_id, default_model_id, \
-         color, settings, pinned, sort_order, include_global_rules, created_at, updated_at FROM projects \
+         color, settings, pinned, sort_order, include_global_rules, include_global_system_prompt, \
+         created_at, updated_at FROM projects \
          ORDER BY pinned DESC, sort_order ASC, updated_at DESC",
     )
     .fetch_all(pool)
@@ -632,7 +635,8 @@ pub async fn list_projects(pool: &SqlitePool) -> Result<Vec<Project>> {
 pub async fn get_project(pool: &SqlitePool, id: &str) -> Result<Option<Project>> {
     let p = sqlx::query_as::<_, Project>(
         "SELECT id, name, description, system_prompt, default_provider_id, default_model_id, \
-         color, settings, pinned, sort_order, include_global_rules, created_at, updated_at \
+         color, settings, pinned, sort_order, include_global_rules, include_global_system_prompt, \
+         created_at, updated_at \
          FROM projects WHERE id = ?1",
     )
     .bind(id)
@@ -645,7 +649,8 @@ pub async fn update_project(pool: &SqlitePool, p: &Project, now: i64) -> Result<
     sqlx::query(
         "UPDATE projects SET name = ?1, description = ?2, system_prompt = ?3, \
          default_provider_id = ?4, default_model_id = ?5, color = ?6, settings = ?7, \
-         include_global_rules = ?8, updated_at = ?9 WHERE id = ?10",
+         include_global_rules = ?8, include_global_system_prompt = ?9, \
+         updated_at = ?10 WHERE id = ?11",
     )
     .bind(&p.name)
     .bind(&p.description)
@@ -655,6 +660,7 @@ pub async fn update_project(pool: &SqlitePool, p: &Project, now: i64) -> Result<
     .bind(&p.color)
     .bind(&p.settings)
     .bind(p.include_global_rules)
+    .bind(p.include_global_system_prompt)
     .bind(now)
     .bind(&p.id)
     .execute(pool)
@@ -1041,6 +1047,38 @@ pub async fn set_project_include_global_rules(
 ) -> Result<()> {
     sqlx::query("UPDATE projects SET include_global_rules = ?1, updated_at = ?2 WHERE id = ?3")
         .bind(if include { 1 } else { 0 })
+        .bind(now)
+        .bind(project_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_project_include_global_system_prompt(
+    pool: &SqlitePool,
+    project_id: &str,
+    include: bool,
+    now: i64,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE projects SET include_global_system_prompt = ?1, updated_at = ?2 WHERE id = ?3",
+    )
+    .bind(if include { 1 } else { 0 })
+    .bind(now)
+    .bind(project_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn set_project_system_prompt(
+    pool: &SqlitePool,
+    project_id: &str,
+    system_prompt: &str,
+    now: i64,
+) -> Result<()> {
+    sqlx::query("UPDATE projects SET system_prompt = ?1, updated_at = ?2 WHERE id = ?3")
+        .bind(system_prompt)
         .bind(now)
         .bind(project_id)
         .execute(pool)
