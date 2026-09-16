@@ -151,6 +151,7 @@
     return { prompt, completion, total };
   });
   let model = $derived(lastMsg.model);
+  let fastRouted = $derived(Boolean(lastMsg.fastRouted));
 
   let errEntry = $derived.by(() => {
     for (const m of messages) {
@@ -239,6 +240,9 @@
     <div class="msg-foot">
       {#if model}
         <span class="foot-model">{model}</span>
+      {/if}
+      {#if fastRouted}
+        <span class="foot-fast" title={m.chat_fast_routed()}>{m.chat_fast_routed()}</span>
       {/if}
       {#if aggUsage.prompt > 0}
         <span class="foot-item">{m.message_tokens_prompt()}: {aggUsage.prompt}</span>
@@ -621,6 +625,16 @@
   }
   .foot-model { white-space: nowrap; }
   .foot-item { white-space: nowrap; }
+  .foot-fast {
+    font-size: 0.65rem;
+    padding: 0.05rem 0.35rem;
+    border-radius: 9999px;
+    background: var(--accent);
+    color: var(--accent-foreground);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
   .foot-sep { flex-shrink: 0; }
   .foot-status { white-space: nowrap; }
   .foot-status.st-err { color: var(--destructive); }

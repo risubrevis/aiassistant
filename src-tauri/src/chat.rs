@@ -171,6 +171,9 @@ struct MessageDonePayload {
     message_id: String,
     usage: Option<crate::providers::Usage>,
     finish_reason: String,
+    model: Option<String>,
+    fast_routed: bool,
+    model_display_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -258,6 +261,30 @@ pub async fn resolve_provider(
         .ok()
         .flatten()?;
     Some((prov_row.to_config_provider(), model_row.name, model_row.id))
+}
+
+/// Resolve the configured secondary (fast) model to a usable provider config,
+/// model name and model uuid. Returns `None` when unset, empty, or the
+/// referenced provider/model no longer exist in the DB.
+pub(crate) async fn resolve_secondary(
+    pool: &SqlitePool,
+    config: &Config,
+) -> Option<(crate::config::Provider, String, String)> {
+    let sm = config
+        .defaults
+        .secondary_model
+        .as_ref()
+        .filter(|m| !m.provider.is_empty() && !m.model.is_empty())?;
+    let p = crate::db::providers::get_provider(pool, &sm.provider)
+        .await
+        .ok()
+        .flatten()?
+        .to_config_provider();
+    let row = crate::db::providers::get_model(pool, &sm.model)
+        .await
+        .ok()
+        .flatten()?;
+    Some((p, row.name, row.id))
 }
 
 /// Parse persisted content_parts into block JSON values.
@@ -681,26 +708,12 @@ pub async fn generate_chat_title(
     chat: &Chat,
     project: Option<&crate::db::models::Project>,
 ) -> Option<String> {
-    let (pcfg, model) = if let Some(sm) = config
-        .defaults
-        .secondary_model
-        .as_ref()
-        .filter(|m| !m.provider.is_empty() && !m.model.is_empty())
-    {
-        let p = crate::db::providers::get_provider(pool, &sm.provider)
-            .await
-            .ok()
-            .flatten()?
-            .to_config_provider();
-        let m = crate::db::providers::get_model(pool, &sm.model)
-            .await
-            .ok()
-            .flatten()?
-            .name;
-        (p, m)
-    } else {
-        let (p, model, _uuid) = resolve_provider(pool, chat, project, config).await?;
-        (p, model)
+    let (pcfg, model) = match resolve_secondary(pool, config).await {
+        Some((p, m, _uuid)) => (p, m),
+        None => {
+            let (p, model, _uuid) = resolve_provider(pool, chat, project, config).await?;
+            (p, model)
+        }
     };
 
     let history =
@@ -802,6 +815,75 @@ pub async fn generate_chat_title(
         return None;
     }
     Some(cleaned)
+}
+
+/// Cheap turn-start classifier running on the secondary (fast) model. Returns
+/// `true` when the latest user message looks like a "simple" turn the fast
+/// model can handle (quick Q&A, greeting, light read+summarize, formatting,
+/// short follow-up). Conservative: any doubt, error, or missing user text
+/// returns `false` (route to the main model). `history` is the turn history;
+/// only the latest user message is sent to keep the call tiny.
+async fn classify_simple_turn(
+    pcfg: &crate::config::Provider,
+    model: &str,
+    history: &[models::Message],
+) -> bool {
+    let user_text = history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.as_str())
+        .filter(|s| !s.trim().is_empty());
+    let user_text = match user_text {
+        Some(t) => t.chars().take(2000).collect::<String>(),
+        None => return false,
+    };
+    let provider: Box<dyn Provider + Send> = match providers::build(pcfg) {
+        Some(p) => p,
+        None => return false,
+    };
+    let system = "You are a routing classifier for an AI coding assistant. Decide whether the user's latest message is a SIMPLE or COMPLEX request.\nSIMPLE = greeting, small talk, a quick factual question, a short follow-up needing no multi-step reasoning, a request to read one file and give a brief summary, or simple formatting/rewording.\nCOMPLEX = multi-step coding, debugging, refactoring, writing or editing code/files, architectural analysis, long-form writing, anything needing tools beyond a single read, or anything ambiguous.\nWhen unsure, answer COMPLEX. Reply with exactly one word: SIMPLE or COMPLEX.";
+    let req = CompleteRequest {
+        model: model.to_string(),
+        messages: vec![ChatMessage {
+            role: "user".into(),
+            content: user_text,
+            tool_call_id: None,
+            tool_calls: None,
+            parts: None,
+        }],
+        system: Some(system.into()),
+        temperature: Some(0.0),
+        max_tokens: Some(8),
+        tools: None,
+        thinking: None,
+        thinking_effort: None,
+    };
+    let (tx, mut rx) = mpsc::channel::<CompleteEvent>(64);
+    let stream_task = tauri::async_runtime::spawn(async move {
+        if let Err(e) = provider.stream_complete(req, tx).await {
+            warn!("simple-turn classifier stream error: {e}");
+        }
+    });
+    let mut text = String::new();
+    let collect = async {
+        while let Some(ev) = rx.recv().await {
+            if let CompleteEvent::BlockDelta { text: Some(t), .. } = ev {
+                text.push_str(&t);
+            }
+        }
+        text
+    };
+    let text = match tokio::time::timeout(std::time::Duration::from_secs(15), collect).await {
+        Ok(t) => t,
+        Err(_) => {
+            warn!("simple-turn classifier timed out, falling back to main model");
+            stream_task.abort();
+            return false;
+        }
+    };
+    let _ = stream_task.await;
+    text.trim().to_uppercase().starts_with("SIMPLE")
 }
 
 /// Build LLM history, replacing the pre-boundary range with the session summary
@@ -1180,6 +1262,9 @@ async fn process_injection(
         usage: None,
         thinking_ms: None,
         finish_reason: None,
+        model_id: None,
+        fast_routed: 0,
+        model_display_name: None,
         is_branch_root: 0,
         created_at: now_ms(),
     };
@@ -1251,6 +1336,9 @@ async fn start_turn(
                 usage: None,
                 thinking_ms: None,
                 finish_reason: None,
+                model_id: None,
+                fast_routed: 0,
+                model_display_name: None,
                 is_branch_root: 0,
                 created_at: now_ms(),
             };
@@ -1299,6 +1387,9 @@ async fn start_turn(
                 usage: None,
                 thinking_ms: None,
                 finish_reason: None,
+                model_id: None,
+                fast_routed: 0,
+                model_display_name: None,
                 is_branch_root: 1,
                 created_at: now_ms(),
             };
@@ -1381,7 +1472,7 @@ async fn run_turn(
                 .map(|s| s.to_string())
         })
         .unwrap_or_else(|| cfg.defaults.edit_toggle.clone());
-    let (pcfg, model, model_uuid) =
+    let (mut pcfg, mut model, mut model_uuid) =
         match resolve_provider(&pool, &chat, project.as_ref(), &cfg).await {
             Some(v) => v,
             None => {
@@ -1401,6 +1492,29 @@ async fn run_turn(
             pcfg.kind
         ));
     }
+
+    // Path security roots (project + chat paths).
+    let roots = projects::allowed_roots(&pool, chat.project_id.as_deref(), &chat_id).await;
+    crate::tools::set_path_roots(roots.clone());
+    crate::tools::set_trash_mode(cfg.defaults.delete_to_trash);
+
+    // History = active branch up to the leaf.
+    let history = models::list_active_branch(&pool, &chat_id, Some(&leaf_id)).await?;
+    // Smart routing: a cheap classifier on the secondary (fast) model decides
+    // whether this turn is simple enough to run entirely on it. The whole turn
+    // (all tool-call iterations) then uses the fast model, preserving reasoning
+    // continuity. Conservative — any doubt falls back to the main model.
+    let mut fast_routed = false;
+    if cfg.defaults.secondary_routing_enabled {
+        if let Some((sp, sm_name, sm_uuid)) = resolve_secondary(&pool, &cfg).await {
+            if sm_uuid != model_uuid && classify_simple_turn(&sp, &sm_name, &history).await {
+                pcfg = sp;
+                model = sm_name;
+                model_uuid = sm_uuid;
+                fast_routed = true;
+            }
+        }
+    }
     let thinking_supported = providers::supports_thinking(&pcfg.kind, &model);
     let thinking = if thinking_supported {
         Some(chat.thinking_enabled != 0)
@@ -1412,14 +1526,17 @@ async fn run_turn(
     } else {
         None
     };
-
-    // Path security roots (project + chat paths).
-    let roots = projects::allowed_roots(&pool, chat.project_id.as_deref(), &chat_id).await;
-    crate::tools::set_path_roots(roots.clone());
-    crate::tools::set_trash_mode(cfg.defaults.delete_to_trash);
-
-    // History = active branch up to the leaf.
-    let history = models::list_active_branch(&pool, &chat_id, Some(&leaf_id)).await?;
+    let model_display_name = crate::db::providers::get_model(&pool, &model_uuid)
+        .await
+        .ok()
+        .flatten()
+        .map(|m| {
+            if m.display_name.is_empty() {
+                m.name
+            } else {
+                m.display_name
+            }
+        });
     let context_window = models::resolve_context_window(&pool, &model_uuid).await;
     let pct = cfg.defaults.auto_collapse_context_pct;
     let existing = models::latest_chat_session(&pool, &chat_id).await?;
@@ -2022,6 +2139,9 @@ async fn run_turn(
                     .map(|u| serde_json::to_string(u).unwrap_or_default()),
                 thinking_ms: Some(thinking_ms),
                 finish_reason: Some(finish_reason.clone()),
+                model_id: Some(model_uuid.clone()),
+                fast_routed: if fast_routed { 1 } else { 0 },
+                model_display_name: None,
                 is_branch_root: 0,
                 created_at: now_ms(),
             };
@@ -2054,6 +2174,9 @@ async fn run_turn(
                     message_id: assistant_id.clone(),
                     usage: usage.clone(),
                     finish_reason: "error".into(),
+                    model: Some(model.clone()),
+                    fast_routed,
+                    model_display_name: model_display_name.clone(),
                 },
             );
             let final_meta = rules::with_active_leaf(&chat.meta, &assistant_id);
@@ -2077,6 +2200,9 @@ async fn run_turn(
                         message_id: assistant_id.clone(),
                         usage: usage.clone(),
                         finish_reason: "interrupted".into(),
+                        model: Some(model.clone()),
+                        fast_routed,
+                        model_display_name: model_display_name.clone(),
                     },
                 );
                 // Append the partial assistant text to work (no tool calls).
@@ -2469,6 +2595,9 @@ async fn run_turn(
                 usage: None,
                 thinking_ms: None,
                 finish_reason: None,
+                model_id: None,
+                fast_routed: 0,
+                model_display_name: None,
                 is_branch_root: 0,
                 created_at: now_ms(),
             };
@@ -2508,6 +2637,9 @@ async fn run_turn(
             message_id: last_message_id.clone(),
             usage: last_usage,
             finish_reason: last_finish,
+            model: Some(model.clone()),
+            fast_routed,
+            model_display_name: model_display_name.clone(),
         },
     );
     emit_status(&app, &chat_id, ChatStatus::Idle, None);

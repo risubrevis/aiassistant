@@ -21,8 +21,8 @@ pub use write::{
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
     write_environment_info, write_logging_field, write_mode, write_network,
     write_notifications_enabled, write_rag_enabled, write_remember_window_state,
-    write_send_immediately, write_send_on_enter, write_system_prompt, write_vision_model_enabled,
-    write_web_search,
+    write_secondary_routing_enabled, write_send_immediately, write_send_on_enter,
+    write_system_prompt, write_vision_model_enabled, write_web_search,
 };
 
 /// App config directory: `config_dir/aiassistant` per-OS (XDG/AppData/Library).
@@ -159,6 +159,7 @@ edit_toggle = "ask"         # ask | auto
 # provider/model UUIDs from the DB. Empty/unset = not selected.
 # main_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # secondary_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
+# secondary_routing_enabled = true  # route simple turns to the fast model (requires secondary_model)
 # embedding_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # vision_model_enabled = false   # route image analysis to a separate vision model (analyze_image tool)
 # vision_model = { provider = "<provider-uuid>", model = "<model-uuid>" }

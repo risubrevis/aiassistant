@@ -55,6 +55,14 @@ pub struct Message {
     pub thinking_ms: Option<i64>,
     pub finish_reason: Option<String>,
     pub is_branch_root: i64,
+    #[sqlx(default)]
+    pub model_id: Option<String>,
+    #[sqlx(default)]
+    pub fast_routed: i64,
+    /// Virtual field — populated only by queries that LEFT JOIN provider_models
+    /// (list_messages, chat_info). Not a real DB column.
+    #[sqlx(default)]
+    pub model_display_name: Option<String>,
     pub created_at: i64,
 }
 
@@ -484,8 +492,8 @@ pub async fn insert_message(pool: &SqlitePool, m: &Message, now: i64) -> Result<
     sqlx::query(
         "INSERT INTO messages \
          (id, chat_id, parent_id, role, content, content_parts, model, usage, thinking_ms, \
-          finish_reason, is_branch_root, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+          finish_reason, is_branch_root, created_at, model_id, fast_routed) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
     )
     .bind(&m.id)
     .bind(&m.chat_id)
@@ -499,6 +507,8 @@ pub async fn insert_message(pool: &SqlitePool, m: &Message, now: i64) -> Result<
     .bind(&m.finish_reason)
     .bind(m.is_branch_root)
     .bind(now)
+    .bind(&m.model_id)
+    .bind(m.fast_routed)
     .execute(pool)
     .await?;
     Ok(())
@@ -507,9 +517,12 @@ pub async fn insert_message(pool: &SqlitePool, m: &Message, now: i64) -> Result<
 /// All messages in a chat (every branch), ordered by creation.
 pub async fn list_messages(pool: &SqlitePool, chat_id: &str) -> Result<Vec<Message>> {
     let msgs = sqlx::query_as::<_, Message>(
-        "SELECT id, chat_id, parent_id, role, content, content_parts, model, usage, thinking_ms, \
-         finish_reason, is_branch_root, created_at FROM messages WHERE chat_id = ?1 \
-         ORDER BY created_at ASC",
+        "SELECT m.id, m.chat_id, m.parent_id, m.role, m.content, m.content_parts, m.model, \
+         m.usage, m.thinking_ms, m.finish_reason, m.is_branch_root, m.created_at, m.model_id, \
+         m.fast_routed, pm.display_name AS model_display_name \
+         FROM messages m \
+         LEFT JOIN provider_models pm ON pm.id = m.model_id \
+         WHERE m.chat_id = ?1 ORDER BY m.created_at ASC",
     )
     .bind(chat_id)
     .fetch_all(pool)
@@ -1425,6 +1438,18 @@ pub async fn resolve_context_window(pool: &SqlitePool, model_id: &str) -> u64 {
 
 // ----- chat info -----
 
+/// Per-model token/turn breakdown for a chat.
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct ModelUsage {
+    pub model_id: Option<String>,
+    pub display_name: Option<String>,
+    pub name: Option<String>,
+    pub turns: i64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
 /// Aggregated chat metadata for the chat-info panel.
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatInfo {
@@ -1456,6 +1481,9 @@ pub struct ChatInfo {
     pub total_generation_ms: u64,
     pub first_message_at: Option<i64>,
     pub last_message_at: Option<i64>,
+    pub models: Vec<ModelUsage>,
+    pub fast_turns: i64,
+    pub fast_total_tokens: u64,
 }
 
 pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
@@ -1498,13 +1526,19 @@ pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
             total_generation_ms: 0,
             first_message_at: None,
             last_message_at: None,
+            models: vec![],
+            fast_turns: 0,
+            fast_total_tokens: 0,
         });
     };
 
     let msgs = sqlx::query_as::<_, Message>(
-        "SELECT id, chat_id, parent_id, role, content, content_parts, model, usage, thinking_ms, \
-         finish_reason, is_branch_root, created_at FROM messages WHERE chat_id = ?1 \
-         ORDER BY created_at ASC",
+        "SELECT m.id, m.chat_id, m.parent_id, m.role, m.content, m.content_parts, m.model, \
+         m.usage, m.thinking_ms, m.finish_reason, m.is_branch_root, m.created_at, m.model_id, \
+         m.fast_routed, pm.display_name AS model_display_name \
+         FROM messages m \
+         LEFT JOIN provider_models pm ON pm.id = m.model_id \
+         WHERE m.chat_id = ?1 ORDER BY m.created_at ASC",
     )
     .bind(chat_id)
     .fetch_all(pool)
@@ -1523,6 +1557,10 @@ pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
     let mut total_ttft = 0u64;
     let mut total_generation = 0u64;
     let mut last_model: Option<String> = None;
+    use std::collections::BTreeMap;
+    let mut by_model: BTreeMap<Option<String>, ModelUsage> = BTreeMap::new();
+    let mut fast_turns: i64 = 0;
+    let mut fast_total_tokens: u64 = 0;
     for m in &msgs {
         match m.role.as_str() {
             "user" => user_messages += 1,
@@ -1549,7 +1587,39 @@ pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
         if m.role == "assistant" && m.model.is_some() {
             last_model = m.model.clone();
         }
+        if m.role == "assistant" {
+            let entry = by_model
+                .entry(m.model_id.clone())
+                .or_insert_with(|| ModelUsage {
+                    model_id: m.model_id.clone(),
+                    display_name: m.model_display_name.clone(),
+                    name: m.model.clone(),
+                    turns: 0,
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                });
+            entry.turns += 1;
+            if let Some(u) = m.usage.as_ref() {
+                if let Ok(usage) = serde_json::from_str::<crate::providers::Usage>(u) {
+                    entry.prompt_tokens += usage.prompt_tokens;
+                    entry.completion_tokens += usage.completion_tokens;
+                    entry.total_tokens += usage.total_tokens;
+                }
+            }
+            if m.fast_routed != 0 {
+                fast_turns += 1;
+                if let Some(u) = m.usage.as_ref() {
+                    if let Ok(usage) = serde_json::from_str::<crate::providers::Usage>(u) {
+                        fast_total_tokens += usage.total_tokens;
+                    }
+                }
+            }
+        }
     }
+
+    let mut models: Vec<ModelUsage> = by_model.into_values().collect();
+    models.sort_by(|a, b| b.turns.cmp(&a.turns));
 
     let tool_calls: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tool_calls WHERE chat_id = ?1")
         .bind(chat_id)
@@ -1642,6 +1712,9 @@ pub async fn chat_info(pool: &SqlitePool, chat_id: &str) -> Result<ChatInfo> {
         total_generation_ms: total_generation,
         first_message_at,
         last_message_at,
+        models,
+        fast_turns,
+        fast_total_tokens,
     })
 }
 

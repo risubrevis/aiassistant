@@ -66,6 +66,7 @@ export interface AppConfig {
     edit_toggle: string;
     main_model: ModelRef | null;
     secondary_model: ModelRef | null;
+    secondary_routing_enabled: boolean;
     embedding_model: ModelRef | null;
     vision_model_enabled: boolean;
     vision_model: ModelRef | null;
@@ -109,6 +110,16 @@ export interface Chat {
   updated_at: number;
 }
 
+export interface ModelUsage {
+  model_id: string | null;
+  display_name: string | null;
+  name: string | null;
+  turns: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
 export interface ChatInfo {
   chat_id: string;
   title: string;
@@ -138,6 +149,9 @@ export interface ChatInfo {
   total_generation_ms: number;
   first_message_at: number | null;
   last_message_at: number | null;
+  models: ModelUsage[];
+  fast_turns: number;
+  fast_total_tokens: number;
 }
 
 export interface DayActivity {
@@ -187,6 +201,9 @@ export interface Message {
   finish_reason?: string | null;
   is_branch_root: number;
   created_at: number;
+  model_id?: string | null;
+  fast_routed?: number;
+  model_display_name?: string | null;
 }
 
 export interface Project {
@@ -1014,6 +1031,8 @@ export const setRagEnabled = (value: boolean) =>
   invoke<void>("set_rag_enabled", { value });
 export const setVisionModelEnabled = (value: boolean) =>
   invoke<void>("set_vision_model_enabled", { value });
+export const setSecondaryRoutingEnabled = (value: boolean) =>
+  invoke<void>("set_secondary_routing_enabled", { value });
 
 export function onProvidersChanged(cb: () => void): Promise<UnlistenFn> {
   return listen("providers:changed", () => cb());
@@ -1337,6 +1356,9 @@ export interface MessageDoneEvent {
   message_id: string;
   usage: Usage | null;
   finish_reason: string;
+  model: string | null;
+  model_display_name: string | null;
+  fast_routed: boolean;
 }
 export interface UserMessageEvent {
   chat_id: string;

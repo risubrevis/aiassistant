@@ -306,6 +306,12 @@ pub struct Defaults {
     pub main_model: Option<ModelRef>,
     #[serde(default)]
     pub secondary_model: Option<ModelRef>,
+    /// Route simple turns (quick Q&A, light tool use, short follow-ups) to the
+    /// secondary (fast) model via a turn-start classifier. When false, or when
+    /// the classifier is unsure, the chat's main model is used. No effect unless
+    /// a secondary model is configured.
+    #[serde(default = "default_true")]
+    pub secondary_routing_enabled: bool,
     #[serde(default)]
     pub embedding_model: Option<ModelRef>,
     /// Route image analysis to a dedicated vision model via the `analyze_image`
@@ -395,6 +401,7 @@ impl Default for Defaults {
             vision_model_enabled: false,
             vision_model: None,
             rag_enabled: true,
+            secondary_routing_enabled: true,
             system_prompt: default_system_prompt(),
             auto_collapse_context_pct: default_collapse_pct(),
             disabled_tools: Vec::new(),

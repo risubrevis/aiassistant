@@ -6,6 +6,7 @@
     setMaxTurns,
     setRagEnabled,
     setVisionModelEnabled,
+    setSecondaryRoutingEnabled,
     ragClearAll,
     ragStatus,
     onRagCleared,
@@ -25,6 +26,7 @@
 
   let primary = $state("");
   let secondary = $state("");
+  let routingEnabled = $state(true);
   let embedding = $state("");
   let vision = $state("");
   let ragEnabled = $state(true);
@@ -62,6 +64,7 @@
     if (!cfg) return;
     primary = refValue(cfg.defaults.main_model);
     secondary = refValue(cfg.defaults.secondary_model);
+    routingEnabled = cfg.defaults.secondary_routing_enabled;
     embedding = refValue(cfg.defaults.embedding_model);
     vision = refValue(cfg.defaults.vision_model);
     ragEnabled = cfg.defaults.rag_enabled;
@@ -191,10 +194,12 @@
     // state from the (not-yet-fully-saved) in-memory config.
     const p = parseValue(primary)!;
     const s = parseValue(secondary);
+    const routing = routingEnabled;
     saving = true;
     try {
       await setDefaultsModel("main_model", p.provider, p.model);
       await setDefaultsModel("secondary_model", s?.provider ?? null, s?.model ?? null);
+      await setSecondaryRoutingEnabled(routing);
       dirty = false;
       toast.success(m.settings_models_saved());
     } catch (err) {
@@ -209,6 +214,8 @@
     try {
       await setDefaultsModel("main_model", null, null);
       await setDefaultsModel("secondary_model", null, null);
+      await setSecondaryRoutingEnabled(true);
+      routingEnabled = true;
       dirty = false;
       toast.success(m.settings_models_reset());
     } catch (err) {
@@ -347,8 +354,24 @@
               dirty = true;
             }}
           />
+          <p class="rag-hint secondary-hint">{m.settings_models_secondary_hint()}</p>
         </div>
       </div>
+
+      {#if secondary}
+        <label class="rag-toggle">
+          <input
+            type="checkbox"
+            checked={routingEnabled}
+            onchange={(e) => {
+              routingEnabled = e.currentTarget.checked;
+              dirty = true;
+            }}
+          />
+          <span class="rag-toggle-label">{m.settings_models_routing()}</span>
+        </label>
+        <p class="rag-hint">{m.settings_models_routing_hint()}</p>
+      {/if}
 
       <div class="actions">
         <button class="btn primary" onclick={save} disabled={saving || !dirty}>
@@ -616,6 +639,9 @@
     font-size: 0.72rem;
     color: var(--muted-foreground);
     line-height: 1.35;
+  }
+  .secondary-hint {
+    margin-top: 0.15rem;
   }
   .rag-clear {
     display: flex;

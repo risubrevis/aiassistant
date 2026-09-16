@@ -165,6 +165,13 @@ pub fn write_rag_enabled(value: bool) -> Result<()> {
     write_doc(doc)
 }
 
+/// Set `[defaults].secondary_routing_enabled` (route simple turns to the secondary model).
+pub fn write_secondary_routing_enabled(value: bool) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["defaults"]["secondary_routing_enabled"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
 /// Set `[defaults].vision_model_enabled` (route image analysis to a vision model).
 pub fn write_vision_model_enabled(value: bool) -> Result<()> {
     let mut doc = load_doc()?;

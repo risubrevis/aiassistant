@@ -26,6 +26,7 @@ export interface UiMessage {
   blocks: ContentBlock[];
   streaming: boolean;
   model?: string | null;
+  fastRouted?: boolean;
   usage?: Usage | null;
   finish_reason?: string | null;
   thinking_ms?: number | null;
@@ -162,7 +163,8 @@ function toUi(msg: Message): UiMessage {
     content: msg.content,
     blocks: parseBlocks(msg),
     streaming: false,
-    model: msg.model,
+    model: msg.model_display_name ?? msg.model,
+    fastRouted: !!msg.fast_routed,
     usage: msg.usage ? safeParseUsage(msg.usage) : null,
     finish_reason: msg.finish_reason,
     thinking_ms: msg.thinking_ms,
@@ -821,6 +823,8 @@ export function applyMessageDone(e: ipc.MessageDoneEvent) {
       content: text || msg.content,
       usage: e.usage ?? null,
       finish_reason: e.finish_reason,
+      model: e.model_display_name ?? e.model ?? msg.model,
+      fastRouted: e.fast_routed,
     };
     return { ...m, [e.chat_id]: next };
   });

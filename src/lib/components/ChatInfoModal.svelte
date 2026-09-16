@@ -90,8 +90,26 @@
           { label: m.info_prompt_tokens(), value: n(info.total_prompt_tokens), mono: true },
           { label: m.info_completion_tokens(), value: n(info.total_completion_tokens), mono: true },
           { label: m.info_total_tokens(), value: n(info.total_tokens), mono: true },
+          ...(info.fast_turns > 0
+            ? [
+                { label: m.info_fast_turns(), value: n(info.fast_turns), mono: true },
+                { label: m.info_fast_tokens(), value: n(info.fast_total_tokens), mono: true },
+              ]
+            : []),
         ],
       },
+      ...(info.models.length > 0
+        ? [
+            {
+              title: m.info_models(),
+              rows: info.models.map((mdl) => ({
+                label: mdl.display_name ?? mdl.name ?? "—",
+                value: `${n(mdl.turns)} ${m.info_model_turns()} · ${n(mdl.total_tokens)} tok`,
+                mono: true,
+              })),
+            },
+          ]
+        : []),
       {
         title: m.info_durations(),
         rows: [
@@ -161,7 +179,7 @@
             <section class="section">
               {#if sec.title}<div class="sec-title">{sec.title}</div>{/if}
               <div class="rows">
-                {#each sec.rows as row (row.label)}
+                {#each sec.rows as row, i (i)}
                   <div class="row">
                     <span class="k">{row.label}</span>
                     <span class="v" class:mono={row.mono}>{row.value}</span>

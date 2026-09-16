@@ -1008,25 +1008,9 @@ async fn chat_compact(
     // Summarizer model: the configured secondary (fast) model if present,
     // otherwise the chat's main model. The context window above stays tied to
     // the main model so the kept tail matches the continuation model's capacity.
-    let (pcfg, model) = if let Some(sm) = cfg
-        .defaults
-        .secondary_model
-        .as_ref()
-        .filter(|m| !m.provider.is_empty() && !m.model.is_empty())
-    {
-        let p = db::providers::get_provider(&state.pool, &sm.provider)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no provider for secondary model".to_string())?
-            .to_config_provider();
-        let m = db::providers::get_model(&state.pool, &sm.model)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "no model for secondary model".to_string())?
-            .name;
-        (p, m)
-    } else {
-        (main_pcfg.clone(), main_model.clone())
+    let (pcfg, model) = match chat::resolve_secondary(&state.pool, &cfg).await {
+        Some((p, m, _uuid)) => (p, m),
+        None => (main_pcfg.clone(), main_model.clone()),
     };
     let leaf_id = rules::active_leaf(&chat.meta);
     let history = db::models::list_active_branch(&state.pool, &chat_id, leaf_id.as_deref())
@@ -3581,6 +3565,20 @@ async fn set_rag_enabled(
 }
 
 #[tauri::command]
+async fn set_secondary_routing_enabled(
+    value: bool,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    config::write_secondary_routing_enabled(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.defaults.secondary_routing_enabled = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_vision_model_enabled(
     value: bool,
     state: State<'_, AppState>,
@@ -3976,6 +3974,7 @@ pub fn run() {
             providers_all_models,
             set_defaults_model,
             set_rag_enabled,
+            set_secondary_routing_enabled,
             set_vision_model_enabled,
             rag_reindex_project,
             rag_clear_project,
