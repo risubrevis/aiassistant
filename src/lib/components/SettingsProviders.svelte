@@ -43,7 +43,7 @@
   const kindDefaults: Record<string, { name: string; base_url: string; timeout: number }> = {
     openai: { name: "OpenAI", base_url: "https://api.openai.com/v1", timeout: 30_000 },
     anthropic: { name: "Anthropic", base_url: "https://api.anthropic.com", timeout: 30_000 },
-    ollama: { name: "Ollama (local)", base_url: "http://localhost:11434/v1", timeout: 30_000 },
+    ollama: { name: "Ollama (local)", base_url: "http://localhost:11434/v1", timeout: 120_000 },
     "lm-studio-desktop": { name: "LM Studio (Desktop)", base_url: "http://localhost:1234/v1", timeout: 120_000 },
     "lm-studio-server": { name: "LM Studio (Server)", base_url: "http://localhost:1234/v1", timeout: 120_000 },
   };
