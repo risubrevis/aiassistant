@@ -581,12 +581,21 @@
             <div class="th">
               <span>API name</span>
               <span>Display name</span>
+              <span class="cw" title="Context window in tokens (0 = auto-detect). Set manually for local models like Ollama that don't report it.">Context</span>
               <span class="c">Visible</span>
             </div>
             {#each modelRows as r (r.name)}
               <div class="tr">
                 <span class="api">{r.name}</span>
                 <input bind:value={r.display_name} />
+                <input
+                  class="cw"
+                  type="number"
+                  min="0"
+                  step="1000"
+                  placeholder="Auto"
+                  bind:value={r.context_window}
+                />
                 <input class="c" type="checkbox" bind:checked={r.enabled} />
               </div>
             {/each}
@@ -915,7 +924,7 @@
   .th,
   .tr {
     display: grid;
-    grid-template-columns: 1.4fr 1.4fr 60px;
+    grid-template-columns: 1.3fr 1.3fr 90px 50px;
     gap: 0.5rem;
     align-items: center;
     padding: 0.3rem 0.5rem;
@@ -933,6 +942,17 @@
   .tr {
     border-top: 1px solid var(--border);
     font-size: 0.8125rem;
+  }
+  .cw {
+    text-align: center;
+    font-size: 0.8125rem;
+  }
+  input.cw {
+    width: 100%;
+    padding: 0.2rem 0.3rem;
+  }
+  input.cw::placeholder {
+    color: var(--text-muted);
   }
   .api {
     color: var(--muted-foreground);
