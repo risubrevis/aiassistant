@@ -262,6 +262,20 @@
     return "green";
   });
 
+  function fmtTokens(n: number): string {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (n >= 1000) return Math.round(n / 1000) + "k";
+    return String(n);
+  }
+
+  let contextTooltip = $derived.by(() => {
+    if (contextWindow > 0) {
+      const pct = Math.round((contextTokens / contextWindow) * 100);
+      return `Context: ${contextTokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${pct}%)`;
+    }
+    return `Estimated context: ~${contextTokens.toLocaleString()} tokens (context window unknown — set it in Settings → Models)`;
+  });
+
   const MODES = ["minimal", "plan", "write"] as const;
 
   function renderSummary(summary: string): string {
@@ -531,6 +545,11 @@
           <LightbulbOff size={15} />
         {/if}
       </button>
+      {#if contextTokens > 0}
+        <span class="ctx-indicator {compactColor}" title={contextTooltip}>
+          {fmtTokens(contextTokens)}{#if contextWindow > 0}/{fmtTokens(contextWindow)}{/if}
+        </span>
+      {/if}
       <button
         class="export-btn compact-btn {compactColor}"
         title={compacting ? m.compaction_compacting() : m.compaction_compact_now()}
@@ -1002,6 +1021,20 @@
   .compact-btn.orange { color: hsl(38 90% 50%); }
   .compact-btn.red { color: hsl(0 70% 55%); }
   .compact-btn.grey { color: var(--muted-foreground); }
+  .ctx-indicator {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    padding: 0 0.25rem;
+    user-select: none;
+    cursor: default;
+    line-height: 1;
+  }
+  .ctx-indicator.green { color: hsl(140 50% 45%); }
+  .ctx-indicator.orange { color: hsl(38 90% 50%); }
+  .ctx-indicator.red { color: hsl(0 70% 55%); }
+  .ctx-indicator.grey { color: var(--muted-foreground); }
   .thinking-btn {
     border: 1px solid var(--border);
     background: var(--background);
