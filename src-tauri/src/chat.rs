@@ -1445,14 +1445,14 @@ async fn run_turn(
                 let _ = app.emit("chat:compacted", s.clone());
                 Some(s)
             }
-            Ok(None) => existing,
+            Ok(None) => existing.clone(),
             Err(e) => {
                 warn!("compaction failed for chat {chat_id}: {e}");
-                existing
+                existing.clone()
             }
         }
     } else {
-        existing
+        existing.clone()
     };
     // Multipart content from persisted attachments for this chat.
     let vision_routing = mode != "minimal"
@@ -1685,6 +1685,7 @@ async fn run_turn(
 
     let mut broke = false;
     let mut pending_injection: Option<InjectedMessage> = None;
+    let mut compaction_attempted = false;
     for iter in 0..max_iters {
         // Drain injected messages that arrived between iterations.
         while let Ok(msg) = inject_rx.try_recv() {
@@ -1702,7 +1703,7 @@ async fn run_turn(
         let assistant_id = Uuid::new_v4().to_string();
         last_message_id = assistant_id.clone();
 
-        let req = CompleteRequest {
+        let mut req = CompleteRequest {
             model: model.clone(),
             messages: work.clone(),
             system: system.clone(),
@@ -1888,6 +1889,78 @@ async fn run_turn(
                 Some(e) => {
                     let retryable = e.retryable();
                     stream_err = Some(e);
+                    // Auto-compaction on ContextLength: instead of failing,
+                    // compact the conversation and retry with the reduced
+                    // context. Only attempted once per turn, and only on the
+                    // first tool-call iteration (where `work` hasn't been
+                    // extended with in-turn tool results).
+                    if matches!(
+                        stream_err,
+                        Some(crate::providers::ProviderError::ContextLength)
+                    ) && !compaction_attempted
+                        && iter == 0
+                    {
+                        compaction_attempted = true;
+                        let prior = existing.as_ref().map(|s| s.summary.as_str());
+                        let fallback_cw = if context_window > 0 {
+                            context_window
+                        } else {
+                            32_768
+                        };
+                        match run_compaction(
+                            &pool,
+                            &pcfg,
+                            &model,
+                            &history,
+                            prior,
+                            fallback_cw,
+                            &chat_id,
+                        )
+                        .await
+                        {
+                            Ok(Some(s)) => {
+                                let _ = app.emit("chat:compacted", s.clone());
+                                work = build_history_with_compaction(
+                                    &history,
+                                    Some(&s),
+                                    &attachment_parts,
+                                );
+                                req = CompleteRequest {
+                                    model: model.clone(),
+                                    messages: work.clone(),
+                                    system: system.clone(),
+                                    temperature: None,
+                                    max_tokens: None,
+                                    tools: tools_json.clone(),
+                                    thinking,
+                                    thinking_effort: thinking_effort.clone(),
+                                };
+                                stream_err = None;
+                                text_acc.clear();
+                                thinking_acc.clear();
+                                block_kind.clear();
+                                tool_calls.clear();
+                                block_starts.clear();
+                                thinking_ms = 0;
+                                finish_reason = "stop".to_string();
+                                usage = None;
+                                warn!(
+                                    "auto-compacted on ContextLength for {chat_id}, retrying with reduced context"
+                                );
+                                continue;
+                            }
+                            Ok(None) => {
+                                warn!(
+                                    "auto-compaction on ContextLength: too short to compact for {chat_id}"
+                                );
+                            }
+                            Err(e) => {
+                                warn!("auto-compaction on ContextLength failed for {chat_id}: {e}");
+                            }
+                        }
+                        finish_reason = "error".to_string();
+                        break;
+                    }
                     if retryable && retry < max_retries {
                         retry += 1;
                         continue;
@@ -1961,7 +2034,8 @@ async fn run_turn(
         if let Some(err) = stream_err {
             let kind = err.kind_str().to_string();
             let detail = err.detail();
-            let retryable = err.retryable();
+            let retryable =
+                err.retryable() || matches!(err, crate::providers::ProviderError::ContextLength);
             warn!("chat turn stream error: {chat_id}: {kind}: {detail}");
             let _ = app.emit(
                 "chat:turn_error",

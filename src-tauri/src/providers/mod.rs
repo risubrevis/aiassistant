@@ -183,7 +183,7 @@ impl ProviderError {
                     .into()
             }
             Self::ContextLength => {
-                "Context length exceeded. Compact or shorten the conversation and retry.".into()
+                "Context length exceeded. The conversation was auto-compacted — press Retry to continue. If the error persists, compact manually or switch to a model with a larger context window.".into()
             }
             Self::ContentFilter => "Content blocked by the provider's safety policy.".into(),
             Self::Network(m) => format!("Network error: {m}"),
@@ -194,14 +194,7 @@ impl ProviderError {
     }
 
     pub fn retryable(&self) -> bool {
-        matches!(
-            self,
-            Self::RateLimit
-                | Self::InsufficientQuota
-                | Self::ContextLength
-                | Self::Network(_)
-                | Self::Server(_)
-        )
+        matches!(self, Self::RateLimit | Self::Network(_) | Self::Server(_))
     }
 }
 
