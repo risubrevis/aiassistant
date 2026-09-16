@@ -43,6 +43,8 @@
   let lastChatId: string | null = null;
   let dragOver = $state(false);
 
+  let scrollRaf: number | null = null;
+
   onMount(async () => {
     try {
       const cfg = await configGet();
@@ -363,7 +365,13 @@
   $effect(() => {
     void messages;
     void compactionResult;
-    void tick().then(() => bottomEl?.scrollIntoView({ behavior: "smooth" }));
+    if (scrollRaf !== null) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = null;
+      void tick().then(() =>
+        bottomEl?.scrollIntoView({ behavior: running ? "auto" : "smooth" }),
+      );
+    });
   });
 
   $effect(() => {
