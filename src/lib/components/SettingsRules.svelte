@@ -305,6 +305,7 @@
     padding: 0.4rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
+    min-width: 0;
   }
   .rule-main {
     flex: 1;
