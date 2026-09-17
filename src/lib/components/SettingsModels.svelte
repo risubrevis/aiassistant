@@ -26,6 +26,7 @@
 
   let primary = $state("");
   let secondary = $state("");
+  let summarization = $state("");
   let routingEnabled = $state(true);
   let embedding = $state("");
   let vision = $state("");
@@ -36,6 +37,8 @@
   let dirty = $state(false);
   let ragDirty = $state(false);
   let visionDirty = $state(false);
+  let summarizationDirty = $state(false);
+  let summarizationSaving = $state(false);
   let saving = $state(false);
   let ragSaving = $state(false);
   let visionSaving = $state(false);
@@ -52,6 +55,7 @@
   let lastEmbedding = $state("");
   let lastVisionEnabled = $state(false);
   let lastVision = $state("");
+  let lastSummarization = $state("");
   let lastMaxTurns = $state(50);
 
   const NOT_SELECTED = "";
@@ -65,6 +69,7 @@
     primary = refValue(cfg.defaults.main_model);
     secondary = refValue(cfg.defaults.secondary_model);
     routingEnabled = cfg.defaults.secondary_routing_enabled;
+    summarization = refValue(cfg.defaults.summarization_model);
     embedding = refValue(cfg.defaults.embedding_model);
     vision = refValue(cfg.defaults.vision_model);
     ragEnabled = cfg.defaults.rag_enabled;
@@ -76,10 +81,12 @@
     lastRagEnabled = ragEnabled;
     lastVisionEnabled = visionEnabled;
     lastVision = vision;
+    lastSummarization = summarization;
     lastMaxTurns = maxTurns;
     dirty = false;
     ragDirty = false;
     visionDirty = false;
+    summarizationDirty = false;
     mtDirty = false;
   }
 
@@ -167,6 +174,10 @@
   const secondaryOptions = $derived<SelectItem[]>([
     { value: NOT_SELECTED, label: m.settings_models_not_selected() },
     ...withCurrent(activeItems, secondary),
+  ]);
+  const summarizationOptions = $derived<SelectItem[]>([
+    { value: NOT_SELECTED, label: m.settings_models_not_selected() },
+    ...withCurrent(activeItems, summarization),
   ]);
   const embeddingOptions = $derived<SelectItem[]>([
     { value: NOT_SELECTED, label: m.settings_models_not_selected() },
@@ -281,6 +292,26 @@
     }
   }
 
+  function cancelSummarization() {
+    summarization = lastSummarization;
+    summarizationDirty = false;
+  }
+
+  async function saveSummarization() {
+    const s = parseValue(summarization);
+    summarizationSaving = true;
+    try {
+      await setDefaultsModel("summarization_model", s?.provider ?? null, s?.model ?? null);
+      summarizationDirty = false;
+      lastSummarization = summarization;
+      toast.success(m.settings_models_saved());
+    } catch (err) {
+      toast.error(m.settings_models_save_failed(), String(err));
+    } finally {
+      summarizationSaving = false;
+    }
+  }
+
   function toggleMaxTurnsUnlimited(e: Event) {
     const checked = (e.target as HTMLInputElement).checked;
     mtUnlimited = checked;
@@ -379,6 +410,31 @@
         </button>
         <button class="btn ghost" onclick={reset} disabled={saving}>
           {m.common_reset()}
+        </button>
+      </div>
+    </section>
+
+    <section class="block summarization-section">
+      <div class="field">
+        <span class="label">{m.settings_models_summarization()}</span>
+        <Select
+          class="w-full"
+          value={summarization}
+          items={summarizationOptions}
+          placeholder={m.settings_models_not_selected()}
+          onchange={(v) => {
+            summarization = v;
+            summarizationDirty = true;
+          }}
+        />
+        <p class="rag-hint">{m.settings_models_summarization_hint()}</p>
+      </div>
+      <div class="actions">
+        <button class="btn primary" onclick={saveSummarization} disabled={summarizationSaving || !summarizationDirty}>
+          {summarizationSaving ? "…" : m.common_save()}
+        </button>
+        <button class="btn ghost" onclick={cancelSummarization} disabled={summarizationSaving || !summarizationDirty}>
+          {m.common_cancel()}
         </button>
       </div>
     </section>

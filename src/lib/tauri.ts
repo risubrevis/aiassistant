@@ -67,6 +67,7 @@ export interface AppConfig {
     main_model: ModelRef | null;
     secondary_model: ModelRef | null;
     secondary_routing_enabled: boolean;
+    summarization_model: ModelRef | null;
     embedding_model: ModelRef | null;
     vision_model_enabled: boolean;
     vision_model: ModelRef | null;
@@ -1023,7 +1024,12 @@ export const providersActiveModels = () =>
 export const providersAllModels = () =>
   invoke<ModelOption[]>("providers_all_models");
 export const setDefaultsModel = (
-  field: "main_model" | "secondary_model" | "embedding_model" | "vision_model",
+  field:
+    | "main_model"
+    | "secondary_model"
+    | "summarization_model"
+    | "embedding_model"
+    | "vision_model",
   provider: string | null,
   model: string | null,
 ) => invoke<void>("set_defaults_model", { field, provider, model });

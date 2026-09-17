@@ -287,6 +287,31 @@ pub(crate) async fn resolve_secondary(
     Some((p, row.name, row.id))
 }
 
+/// Resolve the configured summarization model to a usable provider config,
+/// model name and model uuid. Returns `None` when unset, empty, or the
+/// referenced provider/model no longer exist in the DB. The caller should
+/// fall back to `resolve_provider` (main model) when this returns `None`.
+pub async fn resolve_summarization(
+    pool: &SqlitePool,
+    config: &Config,
+) -> Option<(crate::config::Provider, String, String)> {
+    let sm = config
+        .defaults
+        .summarization_model
+        .as_ref()
+        .filter(|m| !m.provider.is_empty() && !m.model.is_empty())?;
+    let p = crate::db::providers::get_provider(pool, &sm.provider)
+        .await
+        .ok()
+        .flatten()?
+        .to_config_provider();
+    let row = crate::db::providers::get_model(pool, &sm.model)
+        .await
+        .ok()
+        .flatten()?;
+    Some((p, row.name, row.id))
+}
+
 /// Parse persisted content_parts into block JSON values.
 fn parse_blocks(content_parts: &Option<String>) -> Vec<serde_json::Value> {
     match content_parts {
@@ -493,8 +518,8 @@ Output exactly this Markdown structure:
 
 const TITLE_PROMPT: &str =
     "Generate a concise 3-7 word title for this conversation, omitting punctuation. \
-Go straight to the title, without any preamble or prefix like \"Title:\". \
-Be descriptive. Do not speak in the first person.";
+Be descriptive. Do not speak in the first person. \
+Respond with ONLY a JSON object: {\"title\": \"your title here\"}";
 
 /// Rough token estimate (chars/4). Used only for sizing the tail and recording
 /// an approximate token_count — the trigger itself uses real API usage.
@@ -755,7 +780,41 @@ fn looks_like_bad_title(title: &str, user_text: &str) -> bool {
     false
 }
 
-/// Best-effort LLM-generated chat title. Uses the configured secondary (fast)
+/// Try to extract a title from a JSON response like `{"title": "..."}`.
+/// Scans for the first `{`...`}` pair and parses it. Returns `None` when
+/// the response is not valid JSON or doesn't contain a `title` field.
+fn extract_title_from_json(raw: &str) -> Option<String> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    let json_str = &raw[start..=end];
+    let parsed: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let title = parsed.get("title")?.as_str()?;
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Take first line, trim quotes, limit to 50 chars with word-boundary truncation.
+    let first_line = trimmed.lines().next().unwrap_or("").trim();
+    let stripped = first_line.trim_matches(|c| c == '"' || c == '\'');
+    let char_count = stripped.chars().count();
+    let mut s: String = stripped.chars().take(50).collect();
+    if char_count > 50 {
+        if let Some(idx) = s.rfind(' ') {
+            s.truncate(idx);
+        }
+    }
+    let s = s.trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Best-effort LLM-generated chat title. Uses the configured summarization
 /// model when available, otherwise the chat's main model. Returns the title,
 /// or None on failure (caller falls back to a first-line heuristic).
 pub async fn generate_chat_title(
@@ -764,7 +823,7 @@ pub async fn generate_chat_title(
     chat: &Chat,
     project: Option<&crate::db::models::Project>,
 ) -> Option<String> {
-    let (pcfg, model) = match resolve_secondary(pool, config).await {
+    let (pcfg, model) = match resolve_summarization(pool, config).await {
         Some((p, m, _uuid)) => (p, m),
         None => {
             let (p, model, _uuid) = resolve_provider(pool, chat, project, config).await?;
@@ -854,17 +913,22 @@ pub async fn generate_chat_title(
     }
     let _ = stream_task.await;
 
-    let first_line = title.lines().next().unwrap_or("").trim();
-    let trimmed_quotes = first_line.trim_matches(|c| c == '"' || c == '\'');
-    let char_count = trimmed_quotes.chars().count();
-    let mut cleaned: String = trimmed_quotes.chars().take(50).collect();
-    // Truncate at the last word boundary to avoid mid-word cuts.
-    if char_count > 50 {
-        if let Some(idx) = cleaned.rfind(' ') {
-            cleaned.truncate(idx);
+    // Try JSON-structured output first: {"title": "..."}.
+    // This is the primary defense against prompt leakage — the model must
+    // produce valid JSON, making it much harder to echo system instructions.
+    let cleaned = extract_title_from_json(&title).unwrap_or_else(|| {
+        // Fallback: treat the response as plain text (model didn't produce JSON).
+        let first_line = title.lines().next().unwrap_or("").trim();
+        let trimmed_quotes = first_line.trim_matches(|c| c == '"' || c == '\'');
+        let char_count = trimmed_quotes.chars().count();
+        let mut s: String = trimmed_quotes.chars().take(50).collect();
+        if char_count > 50 {
+            if let Some(idx) = s.rfind(' ') {
+                s.truncate(idx);
+            }
         }
-    }
-    let cleaned = cleaned.trim().to_string();
+        s.trim().to_string()
+    });
     if cleaned.is_empty() {
         warn!(
             "title generation produced an empty title for chat {}",
@@ -2683,12 +2747,73 @@ async fn run_turn(
     let final_meta = rules::with_active_leaf(&chat.meta, &current_parent);
     let _ = models::set_chat_meta(&pool, &chat_id, &final_meta, now_ms()).await;
 
-    // Cross-chat summary (docs/08): derive a 1-line summary from the assistant
-    // reply (no extra LLM call in MVP).
+    // Cross-chat summary (docs/08): generate a concise 1-line summary via the
+    // summarization model (or main model fallback). Non-blocking — the
+    // truncation heuristic is used as an immediate fallback.
     if chat.project_id.is_some() && !last_assistant_text.is_empty() {
-        let summary: String = last_assistant_text.chars().take(200).collect();
-        let summary_meta = rules::with_summary(&Some(final_meta.clone()), &summary);
-        let _ = models::set_chat_meta(&pool, &chat_id, &summary_meta, now_ms()).await;
+        let fallback_summary: String = last_assistant_text.chars().take(200).collect();
+        let fallback_meta = rules::with_summary(&Some(final_meta.clone()), &fallback_summary);
+        let _ = models::set_chat_meta(&pool, &chat_id, &fallback_meta, now_ms()).await;
+
+        // Best-effort LLM summary in the background.
+        let pool_s = pool.clone();
+        let chat_id_s = chat_id.clone();
+        let cfg_s = config.clone();
+        let assistant_text_s = last_assistant_text.clone();
+        let meta_s = fallback_meta.clone();
+        tauri::async_runtime::spawn(async move {
+            let cfg = cfg_s.read().unwrap().clone();
+            let (pcfg, model) = match resolve_summarization(&pool_s, &cfg).await {
+                Some((p, m, _)) => (p, m),
+                None => return, // no summarization model and no main model configured
+            };
+            let req = CompleteRequest {
+                model,
+                messages: vec![ChatMessage {
+                    role: "user".into(),
+                    content: assistant_text_s.chars().take(2000).collect(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    parts: None,
+                }],
+                system: Some(
+                    "Summarize this assistant reply in one concise sentence (max 200 characters). \
+                     Output only the summary, no preamble."
+                        .to_string(),
+                ),
+                temperature: Some(0.3),
+                max_tokens: Some(64),
+                tools: None,
+                thinking: None,
+                thinking_effort: None,
+            };
+            let (tx, mut rx) = mpsc::channel::<CompleteEvent>(64);
+            let provider: Box<dyn Provider + Send> = provider_dyn(&pcfg);
+            let stream_task = tauri::async_runtime::spawn(async move {
+                if let Err(e) = provider.stream_complete(req, tx).await {
+                    error!("cross-chat summary stream error: {e}");
+                }
+            });
+            let mut summary = String::new();
+            while let Some(ev) = rx.recv().await {
+                if let CompleteEvent::BlockDelta { text: Some(t), .. } = ev {
+                    summary.push_str(&t);
+                }
+            }
+            let _ = stream_task.await;
+            let summary: String = summary
+                .lines()
+                .next()
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(200)
+                .collect();
+            if !summary.is_empty() {
+                let updated_meta = rules::with_summary(&Some(meta_s), &summary);
+                let _ = models::set_chat_meta(&pool_s, &chat_id_s, &updated_meta, now_ms()).await;
+            }
+        });
     }
 
     crate::tools::clear_path_roots();

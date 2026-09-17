@@ -312,6 +312,10 @@ pub struct Defaults {
     /// a secondary model is configured.
     #[serde(default = "default_true")]
     pub secondary_routing_enabled: bool,
+    /// Dedicated model for summarization tasks: chat titles, context compaction,
+    /// cross-chat summaries. Falls back to the main model when not set.
+    #[serde(default)]
+    pub summarization_model: Option<ModelRef>,
     #[serde(default)]
     pub embedding_model: Option<ModelRef>,
     /// Route image analysis to a dedicated vision model via the `analyze_image`
@@ -402,6 +406,7 @@ impl Default for Defaults {
             vision_model: None,
             rag_enabled: true,
             secondary_routing_enabled: true,
+            summarization_model: None,
             system_prompt: default_system_prompt(),
             auto_collapse_context_pct: default_collapse_pct(),
             disabled_tools: Vec::new(),

@@ -160,6 +160,7 @@ edit_toggle = "ask"         # ask | auto
 # main_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # secondary_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # secondary_routing_enabled = true  # route simple turns to the fast model (requires secondary_model)
+# summarization_model = { provider = "<provider-uuid>", model = "<model-uuid>" }  # used for titles, compaction, cross-chat summaries; falls back to main model
 # embedding_model = { provider = "<provider-uuid>", model = "<model-uuid>" }
 # vision_model_enabled = false   # route image analysis to a separate vision model (analyze_image tool)
 # vision_model = { provider = "<provider-uuid>", model = "<model-uuid>" }

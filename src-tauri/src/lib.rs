@@ -1005,10 +1005,10 @@ async fn chat_compact(
     if context_window == 0 {
         context_window = 16_384;
     }
-    // Summarizer model: the configured secondary (fast) model if present,
+    // Summarizer model: the configured summarization model if present,
     // otherwise the chat's main model. The context window above stays tied to
     // the main model so the kept tail matches the continuation model's capacity.
-    let (pcfg, model) = match chat::resolve_secondary(&state.pool, &cfg).await {
+    let (pcfg, model) = match chat::resolve_summarization(&state.pool, &cfg).await {
         Some((p, m, _uuid)) => (p, m),
         None => (main_pcfg.clone(), main_model.clone()),
     };
@@ -3246,6 +3246,10 @@ async fn provider_models_save(
             [
                 ("main_model", r.defaults.main_model.as_ref()),
                 ("secondary_model", r.defaults.secondary_model.as_ref()),
+                (
+                    "summarization_model",
+                    r.defaults.summarization_model.as_ref(),
+                ),
                 ("embedding_model", r.defaults.embedding_model.as_ref()),
                 ("vision_model", r.defaults.vision_model.as_ref()),
             ]
@@ -3264,6 +3268,7 @@ async fn provider_models_save(
                 match field {
                     "main_model" => w.defaults.main_model = None,
                     "secondary_model" => w.defaults.secondary_model = None,
+                    "summarization_model" => w.defaults.summarization_model = None,
                     "embedding_model" => w.defaults.embedding_model = None,
                     "vision_model" => w.defaults.vision_model = None,
                     _ => unreachable!(),
@@ -3389,7 +3394,11 @@ async fn set_defaults_model(
 ) -> Result<(), String> {
     if !matches!(
         field.as_str(),
-        "main_model" | "secondary_model" | "embedding_model" | "vision_model"
+        "main_model"
+            | "secondary_model"
+            | "embedding_model"
+            | "vision_model"
+            | "summarization_model"
     ) {
         return Err(format!("invalid defaults model field: {field}"));
     }
@@ -3414,6 +3423,7 @@ async fn set_defaults_model(
             "secondary_model" => w.defaults.secondary_model = mr,
             "embedding_model" => w.defaults.embedding_model = mr,
             "vision_model" => w.defaults.vision_model = mr,
+            "summarization_model" => w.defaults.summarization_model = mr,
             _ => unreachable!(),
         }
     }
