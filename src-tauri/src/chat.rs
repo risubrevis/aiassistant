@@ -491,10 +491,10 @@ Output exactly this Markdown structure:
 ## Relevant files
 - (file or directory path: why it matters)"#;
 
-const TITLE_PROMPT: &str = "You generate a short, descriptive title for a chat conversation from the user's first message and the assistant's first reply. \
-Rules: 2-6 words, plain text, no quotes, no trailing punctuation, no prefix like \"Title:\". \
-Write the title in the same language as the user's first message. \
-Respond with ONLY the title.";
+const TITLE_PROMPT: &str =
+    "Generate a concise 3-7 word title for this conversation, omitting punctuation. \
+Go straight to the title, without any preamble or prefix like \"Title:\". \
+Be descriptive. Do not speak in the first person.";
 
 /// Rough token estimate (chars/4). Used only for sizing the tail and recording
 /// an approximate token_count — the trigger itself uses real API usage.
@@ -699,6 +699,62 @@ pub async fn run_compaction(
     }))
 }
 
+/// Count CJK characters (Chinese, Japanese, Korean) in a string.
+/// Used for a script-aware length check since CJK text has no spaces
+/// between words, making `split_whitespace` unreliable.
+fn cjk_char_count(s: &str) -> usize {
+    s.chars()
+        .filter(|&c| {
+            ('\u{4E00}'..='\u{9FFF}').contains(&c) // CJK Unified Ideographs
+            || ('\u{3040}'..='\u{30FF}').contains(&c) // Hiragana + Katakana
+            || ('\u{AC00}'..='\u{D7AF}').contains(&c) // Hangul Syllables
+        })
+        .count()
+}
+
+/// Detect generated titles that look like leaked system-prompt instructions,
+/// echoed user messages, or overly long sentences rather than genuine short
+/// titles. Returns `true` when the candidate should be rejected so the caller
+/// falls back to the first-line heuristic.
+///
+/// This is language-agnostic: it uses character/word counts and user-message
+/// comparison instead of hardcoded keyword lists. The primary defense against
+/// prompt leakage is the `TITLE_PROMPT` itself (anti-preamble, anti-first-person);
+/// this function is a safety net for edge cases.
+fn looks_like_bad_title(title: &str, user_text: &str) -> bool {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // Character count ceiling — language-agnostic, works for all scripts.
+    if trimmed.chars().count() > 50 {
+        return true;
+    }
+    // CJK-specific: characters serve as words in scripts without spaces.
+    // A 3-7 word CJK title is typically 6-20 characters; anything longer
+    // is almost certainly a sentence or instruction echo.
+    let cjk_count = cjk_char_count(trimmed);
+    if cjk_count > 25 {
+        return true;
+    }
+    // Word count ceiling — the prompt asks for 3-7 words; allow up to 8
+    // for compound terms in languages with long words (e.g. German).
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.len() > 8 {
+        return true;
+    }
+    // User-message echo: the title is a near-verbatim prefix of the user's
+    // first message (the model just repeated what the user said).
+    if !user_text.is_empty() {
+        let user_lower = user_text.to_lowercase();
+        let title_lower = trimmed.to_lowercase();
+        if user_lower.starts_with(&title_lower) && words.len() > 4 {
+            return true;
+        }
+    }
+    false
+}
+
 /// Best-effort LLM-generated chat title. Uses the configured secondary (fast)
 /// model when available, otherwise the chat's main model. Returns the title,
 /// or None on failure (caller falls back to a first-line heuristic).
@@ -798,19 +854,28 @@ pub async fn generate_chat_title(
     }
     let _ = stream_task.await;
 
-    let cleaned: String = title
-        .lines()
-        .next()
-        .unwrap_or("")
-        .trim()
-        .trim_matches(|c| c == '"' || c == '\'')
-        .chars()
-        .take(60)
-        .collect();
+    let first_line = title.lines().next().unwrap_or("").trim();
+    let trimmed_quotes = first_line.trim_matches(|c| c == '"' || c == '\'');
+    let char_count = trimmed_quotes.chars().count();
+    let mut cleaned: String = trimmed_quotes.chars().take(50).collect();
+    // Truncate at the last word boundary to avoid mid-word cuts.
+    if char_count > 50 {
+        if let Some(idx) = cleaned.rfind(' ') {
+            cleaned.truncate(idx);
+        }
+    }
+    let cleaned = cleaned.trim().to_string();
     if cleaned.is_empty() {
         warn!(
             "title generation produced an empty title for chat {}",
             chat.id
+        );
+        return None;
+    }
+    if looks_like_bad_title(&cleaned, &user_text) {
+        warn!(
+            "title generation produced a leaked/echoed title for chat {}, falling back: {:?}",
+            chat.id, cleaned
         );
         return None;
     }
@@ -2708,13 +2773,17 @@ async fn run_turn(
                                 .map(|m| m.content.as_str())
                         })
                         .unwrap_or("");
-                    let fallback: String = first_user
-                        .lines()
-                        .next()
-                        .unwrap_or("")
-                        .chars()
-                        .take(60)
-                        .collect();
+                    let fallback: String = {
+                        let first_line = first_user.lines().next().unwrap_or("");
+                        let mut chars: String = first_line.chars().take(60).collect();
+                        // Truncate at the last word boundary to avoid mid-word cuts.
+                        if chars.len() < first_line.len() {
+                            if let Some(idx) = chars.rfind(' ') {
+                                chars.truncate(idx);
+                            }
+                        }
+                        chars.trim().to_string()
+                    };
                     if fallback.is_empty() {
                         return;
                     }
@@ -3577,4 +3646,103 @@ pub async fn export_markdown(pool: &SqlitePool, chat_id: &str) -> anyhow::Result
         out.push_str("\n\n");
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cjk_char_count, looks_like_bad_title};
+
+    #[test]
+    fn good_titles_pass() {
+        assert!(!looks_like_bad_title("Перепайка ОЗУ ноутбука", ""));
+        assert!(!looks_like_bad_title("External RAM enclosure", ""));
+        assert!(!looks_like_bad_title("Debug WebSocket connection", ""));
+        assert!(!looks_like_bad_title("Заголовок статьи", "")); // 2 words, legitimate
+    }
+
+    #[test]
+    fn cjk_titles_pass() {
+        // 8 CJK chars — well within the 25-char CJK limit.
+        assert!(!looks_like_bad_title(
+            "\u{7b14}\u{8bb0}\u{672c}\u{5185}\u{5b58}\u{5347}\u{7ea7}\u{65b9}\u{6cd5}",
+            ""
+        ));
+        // Mixed CJK + latin.
+        assert!(!looks_like_bad_title(
+            "API\u{63a5}\u{53e3}\u{8bbe}\u{8ba1}",
+            ""
+        ));
+    }
+
+    #[test]
+    fn german_compound_pass() {
+        // 4 words, 41 chars — within limits.
+        assert!(!looks_like_bad_title(
+            "Datenbankverbindungskonfiguration",
+            ""
+        ));
+    }
+
+    #[test]
+    fn too_long_rejected() {
+        // >50 chars.
+        assert!(looks_like_bad_title(
+            "This is a very long sentence that is definitely not a title at all",
+            ""
+        ));
+        // >8 words but <=50 chars.
+        assert!(looks_like_bad_title(
+            "one two three four five six seven eight nine ten",
+            ""
+        ));
+    }
+
+    #[test]
+    fn cjk_too_long_rejected() {
+        // 30 CJK chars — exceeds the 25-char CJK limit.
+        let long_cjk: String = "\u{4f60}\u{5fc5}\u{987b}\u{4e3a}\u{8fd9}\u{4e2a}\u{5bf9}\u{8bdd}\u{751f}\u{6210}\u{4e00}\u{4e2a}\u{7b80}\u{77ed}\u{7684}\u{63cf}\u{8ff0}\u{6027}\u{6807}\u{9898}\u{56e0}\u{4e3a}\u{7528}\u{6237}\u{53d1}\u{4e86}\u{4e00}\u{6761}\u{6d88}\u{606f}"
+            .chars()
+            .collect();
+        assert!(looks_like_bad_title(&long_cjk, ""));
+    }
+
+    #[test]
+    fn user_message_echo_rejected() {
+        let user = "Hi, please write me a poem about a duck on the beach today";
+        assert!(looks_like_bad_title(
+            "Hi, please write me a poem about a duck on the beach",
+            user
+        ));
+    }
+
+    #[test]
+    fn short_user_prefix_pass() {
+        // A 3-word title that happens to be a prefix of the user message
+        // is legitimate (e.g. "Debug WebSocket" from "Debug WebSocket connection issue").
+        let user = "Debug WebSocket connection issue with TLS handshake";
+        assert!(!looks_like_bad_title("Debug WebSocket connection", user));
+    }
+
+    #[test]
+    fn empty_rejected() {
+        assert!(looks_like_bad_title("", ""));
+        assert!(looks_like_bad_title("   ", ""));
+    }
+
+    #[test]
+    fn char_limit_boundary() {
+        // Exactly 50 chars — should pass.
+        let exactly_50: String = "a".repeat(50);
+        assert!(!looks_like_bad_title(&exactly_50, ""));
+        // 51 chars — should fail.
+        let fifty_one: String = "a".repeat(51);
+        assert!(looks_like_bad_title(&fifty_one, ""));
+    }
+
+    #[test]
+    fn cjk_char_count_correct() {
+        assert_eq!(cjk_char_count("hello"), 0);
+        assert_eq!(cjk_char_count("\u{4f60}\u{597d}"), 2); // 你好
+        assert_eq!(cjk_char_count("API\u{63a5}\u{53e3}"), 2); // API接口
+    }
 }
