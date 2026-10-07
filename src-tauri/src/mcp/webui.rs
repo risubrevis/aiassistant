@@ -253,6 +253,10 @@ fn loader_script(bg: (u8, u8, u8)) -> String {
     TPL.replace("__BG__", &format!("{},{},{}", bg.0, bg.1, bg.2))
 }
 
+fn no_zoom_script() -> &'static str {
+    r#"(function(){try{var s=document.createElement('style');s.textContent='html,body{touch-action:pan-x pan-y;}';(document.head||document.documentElement).appendChild(s);document.addEventListener('gesturestart',function(e){e.preventDefault();},{passive:false});document.addEventListener('gesturechange',function(e){e.preventDefault();},{passive:false});document.addEventListener('gestureend',function(e){e.preventDefault();},{passive:false});document.addEventListener('touchmove',function(e){if(e.touches.length>1)e.preventDefault();},{passive:false});}catch(e){}})();"#
+}
+
 pub fn open_window(
     app: &AppHandle,
     id: &str,
@@ -282,7 +286,9 @@ pub fn open_window(
         .center()
         .data_directory(server_dir(app, id).join("webdata"))
         .data_store_identifier(data_store_id(id))
-        .initialization_script(loader_script(bg));
+        .initialization_script(loader_script(bg))
+        .initialization_script(no_zoom_script())
+        .zoom_hotkeys_enabled(false);
     if let Some(p) = icon_file(app, id) {
         if let Some(img) = decode_icon(&p) {
             builder = builder.icon(img).context("set mcpwebui window icon")?;

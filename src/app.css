@@ -3,6 +3,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+html,
+body {
+  touch-action: pan-x pan-y;
+}
+
 /*
  * Design tokens (shadcn-svelte). Light/dark themes via `.dark` on <html>.
  * Platform-adaptive tweaks via [data-os="mac|win|linux"] set on <html>.

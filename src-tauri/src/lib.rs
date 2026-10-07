@@ -417,6 +417,7 @@ fn open_settings_window(
         .resizable(true)
         .decorations(true)
         .center()
+        .zoom_hotkeys_enabled(false)
         .build()
         .map_err(|e| e.to_string())?;
         if remember {

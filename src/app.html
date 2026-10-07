@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no" />
     <title>AI Assistant</title>
     <script>
       // Best-effort early theme guess to prevent a white flash on first paint;
@@ -15,6 +15,13 @@
       } catch {
         // matchMedia unavailable — fall through, applyTheme() will fix it later.
       }
+    </script>
+    <script>
+      // Prevent pinch-to-zoom (trackpad/touchscreen) — the app is not a website.
+      document.addEventListener("gesturestart", (e) => e.preventDefault(), { passive: false });
+      document.addEventListener("gesturechange", (e) => e.preventDefault(), { passive: false });
+      document.addEventListener("gestureend", (e) => e.preventDefault(), { passive: false });
+      document.addEventListener("touchmove", (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
     </script>
     <style>
       #app-preloader {
