@@ -166,7 +166,8 @@
 
   $effect(() => {
     if (!anyStreaming) return;
-    const startedAt = Date.now() - untrack(() => totalElapsedMs);
+    const startedAt = firstMsg.created_at;
+    totalElapsedMs = Date.now() - startedAt;
     const timer = setInterval(() => (totalElapsedMs = Date.now() - startedAt), 100);
     return () => clearInterval(timer);
   });
@@ -253,7 +254,7 @@
       {#if aggUsage.total > 0}
         <span class="foot-item">{m.message_tokens_total()}: {aggUsage.total}</span>
       {/if}
-      {#if timeLabel}
+      {#if timeLabel && !anyStreaming}
         <span class="foot-item">{m.message_duration()}: {timeLabel}</span>
       {/if}
       {#if !anyStreaming}
