@@ -150,6 +150,26 @@ fn set_theme(theme: String, state: State<AppState>, app: AppHandle) -> Result<()
 }
 
 #[tauri::command]
+fn set_font_family(value: String, state: State<AppState>, app: AppHandle) -> Result<(), String> {
+    config::write_appearance_field("font_family", &value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.appearance.font_family = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn set_font_size(value: f64, state: State<AppState>, app: AppHandle) -> Result<(), String> {
+    config::write_font_size(value).map_err(|e| e.to_string())?;
+    if let Ok(mut w) = state.config.write() {
+        w.appearance.font_size = value;
+    }
+    app.emit("config:reloaded", ()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn set_send_on_enter(
     value: bool,
     state: State<'_, AppState>,
@@ -3961,6 +3981,8 @@ pub fn run() {
             logs_clear,
             set_log_level,
             set_theme,
+            set_font_family,
+            set_font_size,
             set_send_on_enter,
             set_send_immediately,
             set_notifications_enabled,

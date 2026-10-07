@@ -69,7 +69,7 @@ pub struct AppConfig {
 }
 
 fn default_config_version() -> u32 {
-    1
+    2
 }
 
 /// A global skill: a reusable prompt snippet the user attaches to a single
@@ -230,9 +230,11 @@ pub struct Appearance {
     #[serde(default)]
     pub accent: String,
     #[serde(default = "default_font_size")]
-    pub font_size: u32,
+    pub font_size: f64,
     #[serde(default)]
     pub mono_font: String,
+    #[serde(default)]
+    pub font_family: String,
     #[serde(default = "default_language")]
     pub language: String,
     #[serde(default)]
@@ -244,8 +246,8 @@ pub struct Appearance {
 fn default_theme() -> String {
     "system".into()
 }
-fn default_font_size() -> u32 {
-    14
+fn default_font_size() -> f64 {
+    16.0
 }
 fn default_language() -> String {
     "en".into()
@@ -258,6 +260,7 @@ impl Default for Appearance {
             accent: String::new(),
             font_size: default_font_size(),
             mono_font: String::new(),
+            font_family: String::new(),
             language: default_language(),
             show_thinking: false,
             compact: false,

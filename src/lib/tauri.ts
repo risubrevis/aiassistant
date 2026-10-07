@@ -11,6 +11,7 @@ export interface Appearance {
   accent: string;
   font_size: number;
   mono_font: string;
+  font_family: string;
   language: string;
   show_thinking: boolean;
   compact: boolean;
@@ -550,6 +551,10 @@ export const logsClear = () => invoke<void>("logs_clear");
 export const setLogLevel = (level: string, fileLevel?: string | null) =>
   invoke<void>("set_log_level", { level, fileLevel: fileLevel ?? null });
 export const setTheme = (theme: string) => invoke<void>("set_theme", { theme });
+export const setFontFamily = (value: string) =>
+  invoke<void>("set_font_family", { value });
+export const setFontSize = (value: number) =>
+  invoke<void>("set_font_size", { value });
 export const setNetwork = (input: NetworkInput) =>
   invoke<void>("set_network", { input });
 export const networkTest = (input: NetworkInput) =>

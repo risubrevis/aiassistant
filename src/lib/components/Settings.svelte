@@ -2,9 +2,8 @@
   import { onMount } from "svelte";
   import { settingsTab } from "$lib/stores/settings";
   import { settingsNavWidth, setSettingsNavWidth, saveSettingsNavWidth } from "$lib/stores/layout";
-  import { theme, applyTheme, type Theme } from "$lib/stores/theme";
   import { m } from "$lib/i18n";
-  import { setTheme, takeSettingsTab, onSettingsNavigate } from "$lib/tauri";
+  import { takeSettingsTab, onSettingsNavigate } from "$lib/tauri";
   import SettingsGeneral from "./SettingsGeneral.svelte";
   import SettingsData from "./SettingsData.svelte";
   import SettingsProviders from "./SettingsProviders.svelte";
@@ -17,6 +16,7 @@
   import SettingsWebHooks from "./SettingsWebHooks.svelte";
   import SettingsRules from "./SettingsRules.svelte";
   import SettingsSkills from "./SettingsSkills.svelte";
+  import SettingsAppearance from "./SettingsAppearance.svelte";
   import SettingsNetwork from "./SettingsNetwork.svelte";
   import SettingsLogs from "./SettingsLogs.svelte";
   import SettingsAbout from "./SettingsAbout.svelte";
@@ -40,8 +40,6 @@
     { id: "about", label: m.settings_tab_about() },
   ] as const;
 
-  const themes: Theme[] = ["system", "light", "dark"];
-
   let currentTabLabel = $derived(
     tabs.find((t) => t.id === $settingsTab)?.label ?? "",
   );
@@ -61,16 +59,6 @@
     });
     return () => unlisten?.();
   });
-
-  async function chooseTheme(t: Theme) {
-    theme.set(t);
-    applyTheme(t);
-    try {
-      await setTheme(t);
-    } catch {
-      // Ignore write errors; config is still applied in-memory.
-    }
-  }
 
   let navEl: HTMLElement | undefined = $state();
   let resizing = $state(false);
@@ -121,28 +109,7 @@
     {#if $settingsTab === "general"}
       <SettingsGeneral />
     {:else if $settingsTab === "appearance"}
-      <div class="space-y-4">
-        <div>
-          <div class="mb-2 text-sm font-medium">
-            {m.settings_appearance_theme()}
-          </div>
-          <div class="flex gap-2">
-            {#each themes as t}
-              <button
-                class="theme-chip"
-                class:active={$theme === t}
-                onclick={() => chooseTheme(t)}
-              >
-                {t === "system"
-                  ? m.settings_appearance_theme_system()
-                  : t === "light"
-                    ? m.settings_appearance_theme_light()
-                    : m.settings_appearance_theme_dark()}
-              </button>
-            {/each}
-          </div>
-        </div>
-      </div>
+      <SettingsAppearance />
     {:else if $settingsTab === "network"}
       <SettingsNetwork />
     {:else if $settingsTab === "providers"}
@@ -233,21 +200,5 @@
     flex: 1;
     padding: 1rem 1.25rem;
     overflow-y: auto;
-  }
-  .theme-chip {
-    padding: 0.375rem 0.75rem;
-    border-radius: var(--radius-md);
-    border: 1px solid var(--border);
-    background-color: var(--background);
-    color: var(--foreground);
-    font-size: 0.8125rem;
-    cursor: default;
-  }
-  .theme-chip.active {
-    border-color: var(--primary);
-    color: var(--primary);
-  }
-  .space-y-4 > :global(*) + :global(*) {
-    margin-top: 1rem;
   }
 </style>

@@ -19,7 +19,7 @@ pub use write::write_max_turns;
 pub use write::{
     write_add_environment_info, write_auto_collapse_context_pct, write_auto_pull_changes,
     write_defaults_field, write_defaults_model_ref, write_delete_to_trash, write_disabled_tools,
-    write_environment_info, write_logging_field, write_mode, write_network,
+    write_environment_info, write_font_size, write_logging_field, write_mode, write_network,
     write_notifications_enabled, write_rag_enabled, write_remember_window_state,
     write_secondary_routing_enabled, write_send_immediately, write_send_on_enter,
     write_system_prompt, write_vision_model_enabled, write_web_search,
@@ -57,6 +57,25 @@ pub fn load() -> Result<Config> {
         .with_context(|| format!("failed to read config at {}", path.display()))?;
     let mut config: Config = toml::from_str(&raw)
         .with_context(|| format!("failed to parse config at {}", path.display()))?;
+    // Migration: config_version 1 → 2. The legacy `appearance.font_size` was a
+    // u32 default of 14 that was never applied to the UI; it now drives the root
+    // font-size (default 16.0). Reset legacy 14 → 16.0 so existing users see no
+    // visual change, and stamp config_version = 2.
+    if config.config_version < 2 {
+        config.appearance.font_size = 16.0;
+        config.config_version = 2;
+        if let Ok(mut doc) = raw.parse::<toml_edit::DocumentMut>() {
+            if let Some(appearance) = doc.get_mut("appearance").and_then(|v| v.as_table_mut()) {
+                appearance.insert("font_size", toml_edit::value(16.0_f64));
+            }
+            if let Some(cv) = doc.get_mut("config_version") {
+                *cv = toml_edit::value(2_i64);
+            } else {
+                doc.insert("config_version", toml_edit::value(2_i64));
+            }
+            let _ = std::fs::write(&path, doc.to_string());
+        }
+    }
     merge_system_prompt(&mut config)?;
     for warning in validate(&config) {
         warn!(config.path = %path.display(), "config validation: {warning}");
@@ -134,13 +153,14 @@ pub fn validate(config: &Config) -> Vec<String> {
 /// (minimal subset for the walking skeleton).
 const DEFAULT_CONFIG_TOML: &str = r#"# AIAssistant configuration.
 
-config_version = 1
+config_version = 2
 
 [appearance]
 theme = "system"            # light | dark | system
 accent = ""                 # hex; empty = system/default
-font_size = 14
+font_size = 16.0
 mono_font = ""              # empty = ui-monospace stack
+font_family = ""            # empty = system UI font stack; otherwise a CSS font-family name
 language = "en"             # i18n
 show_thinking = false
 compact = false

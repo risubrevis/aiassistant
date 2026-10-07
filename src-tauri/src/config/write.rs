@@ -102,6 +102,13 @@ pub fn write_auto_collapse_context_pct(value: u32) -> Result<()> {
     write_doc(doc)
 }
 
+/// Set `[appearance].font_size` (root font-size in px).
+pub fn write_font_size(value: f64) -> Result<()> {
+    let mut doc = load_doc()?;
+    doc["appearance"]["font_size"] = toml_edit::value(value);
+    write_doc(doc)
+}
+
 /// Set `[defaults].max_turns` (max LLM tool-call round-trips per turn).
 pub fn write_max_turns(value: u32) -> Result<()> {
     let mut doc = load_doc()?;

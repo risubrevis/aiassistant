@@ -42,6 +42,7 @@
     onAgentBatchComplete,
     onLangChanged,
     type AgentStatusEvent,
+    type AppConfig,
   } from "$lib/tauri";
   import * as chat from "$lib/stores/chat";
   import * as project from "$lib/stores/project";
@@ -208,12 +209,31 @@
     return v === "light" || v === "dark" || v === "system";
   }
 
+  // Apply the configurable root font-size and font family. The root font-size
+  // scales all rem-based UI (default 16px = browser default = no visual change).
+  // A non-empty font_family overrides the --font-sans CSS var; empty = system.
+  function applyFont(cfg: AppConfig) {
+    const size = cfg.appearance.font_size ?? 16;
+    document.documentElement.style.fontSize = `${size}px`;
+    const family = cfg.appearance.font_family?.trim() ?? "";
+    if (family) {
+      const escaped = family.replace(/"/g, '\\"');
+      document.documentElement.style.setProperty(
+        "--font-sans",
+        `"${escaped}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"`,
+      );
+    } else {
+      document.documentElement.style.removeProperty("--font-sans");
+    }
+  }
+
   async function applyConfig() {
     try {
       const cfg = await configGet();
       const t = isTheme(cfg.appearance.theme) ? cfg.appearance.theme : "system";
       theme.set(t);
       applyTheme(t);
+      applyFont(cfg);
     } catch {
       theme.set("system");
       applyTheme("system");
