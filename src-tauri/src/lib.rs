@@ -32,7 +32,7 @@ use agents::AgentRunner;
 use approval::ApprovalRegistry;
 use ask::AskRegistry;
 use chat::ActiveTurns;
-use config::{spawn_config_watcher, Config, ModelRef, Skill};
+use config::{spawn_config_watcher, Config, ModelRef, Provider, Skill};
 use db::mcp_servers::{McpBody, McpServerInput};
 use db::models::{
     Chat, ChatInfo, ChatPath, ChatSession, ChatSummary, Message, Project, ProjectPath, ProjectRule,
@@ -2092,6 +2092,160 @@ async fn environment_detect() -> Result<String, String> {
     Ok(envinfo::detect())
 }
 
+#[derive(serde::Serialize)]
+struct ToolPreview {
+    name: String,
+    description: String,
+}
+
+#[derive(serde::Serialize)]
+struct FirstRequestPreview {
+    mode: String,
+    system_prompt: String,
+    tools: Vec<ToolPreview>,
+    tools_json: String,
+    system_tokens: i64,
+    tools_tokens: i64,
+    total_tokens: i64,
+}
+
+/// Assemble a preview of the first request for a new standalone chat: the
+/// effective system prompt plus tool definitions and an approximate token
+/// count. Mirrors run_turn assembly minus chat/project-specific parts (RAG,
+/// auto-pull, tasks, project skills, chat memory).
+#[tauri::command]
+async fn preview_first_request(state: State<'_, AppState>) -> Result<FirstRequestPreview, String> {
+    let cfg = state.config.read().unwrap().clone();
+    let pool = state.pool.clone();
+    let mode = cfg.defaults.mode.clone();
+
+    // Synthetic projectless chat for a fresh standalone conversation.
+    let chat = db::models::Chat {
+        id: String::new(),
+        project_id: None,
+        title: String::new(),
+        provider_id: None,
+        model_id: None,
+        system_prompt: None,
+        temperature: None,
+        pinned: 0,
+        archived: 0,
+        settings: None,
+        meta: None,
+        thinking_enabled: 0,
+        thinking_effort: String::new(),
+        sort_order: 0,
+        created_at: 0,
+        updated_at: 0,
+    };
+
+    // Effective system prompt (global prompt + env info + global rules).
+    let mut system: Option<String> = if mode == "minimal" {
+        None
+    } else {
+        rules::effective_system_prompt(&pool, &cfg, &chat, None, &mode).await
+    };
+
+    // Worker-agent roster is global (applies to projectless chats too).
+    let agent_contracts: Vec<_> = if mode != "minimal" {
+        db::agents::list_active(&pool)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|r| r.to_contract())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if let Some(block) = agents::roster_block(&agent_contracts) {
+        system = Some(match system {
+            Some(s) => format!("{s}\n\n{block}"),
+            None => block,
+        });
+    }
+
+    // Vision delegation note (when a dedicated vision model is configured).
+    let vision_routing = mode != "minimal"
+        && cfg.defaults.vision_model_enabled
+        && cfg.defaults.vision_model.is_some();
+    if vision_routing {
+        let note = "Vision delegation: images (chat attachments and project files) are not sent to you directly. Use the analyze_image tool to inspect any image — pass attachment_id for chat attachments, or path for files within the project — plus a prompt. The dedicated vision model returns its analysis; use it to answer the user.";
+        system = Some(match system {
+            Some(s) => format!("{s}\n\n{note}"),
+            None => note.to_string(),
+        });
+    }
+
+    let system_prompt = system.unwrap_or_default();
+
+    // Tool registry: same assembly as chat::run_turn, minus project/chat-specific
+    // tools (project skills, cross-chat retrieval, RAG). MCP reuses existing
+    // connections — no new servers are started.
+    let mut registry = tools::Registry::builtin_for_mode_ctx(&mode, false, "off");
+    registry.remove_disabled(&cfg.defaults.disabled_tools);
+    state.mcp.add_to_registry(&mut registry, &mode).await;
+    if mode != "minimal" {
+        registry.register(Box::new(tools::builtin::WebHookList));
+        if db::web_hooks::has_active(&pool).await.unwrap_or(false) {
+            registry.register(Box::new(tools::builtin::WebHookRun));
+        }
+    }
+    agents::add_to_registry(&mut registry, &agent_contracts, &mode);
+    if mode != "minimal"
+        && !cfg
+            .defaults
+            .disabled_tools
+            .iter()
+            .any(|d| d == "analyze_image")
+    {
+        let vision_ref = if vision_routing {
+            cfg.defaults.vision_model.clone()
+        } else {
+            None
+        };
+        // The spec is static; main_pcfg/main_model only matter for execution,
+        // so empty placeholders are fine for a preview.
+        let placeholder_pcfg = Provider {
+            id: String::new(),
+            name: String::new(),
+            kind: "openai".into(),
+            base_url: String::new(),
+            api_key_ref: String::new(),
+            extra_headers: HashMap::new(),
+            timeout_ms: 30000,
+        };
+        registry.register(Box::new(tools::builtin::AnalyzeImage::new(
+            vision_ref,
+            placeholder_pcfg,
+            String::new(),
+        )));
+    }
+
+    let tools_json = serde_json::to_string_pretty(&registry.openai_tools()).unwrap_or_default();
+    let tools: Vec<ToolPreview> = registry
+        .specs()
+        .into_iter()
+        .map(|s| ToolPreview {
+            name: s.name,
+            description: s.description,
+        })
+        .collect();
+
+    // Token estimate mirrors chat::estimate_tokens (chars / 4).
+    let system_tokens = system_prompt.len() as i64 / 4;
+    let tools_tokens = tools_json.len() as i64 / 4;
+
+    Ok(FirstRequestPreview {
+        mode,
+        system_prompt,
+        tools,
+        tools_json,
+        system_tokens,
+        tools_tokens,
+        total_tokens: system_tokens + tools_tokens,
+    })
+}
+
 #[tauri::command]
 async fn global_rules_list(state: State<'_, AppState>) -> Result<Vec<Rule>, String> {
     db::models::list_global_rules(&state.pool)
@@ -3912,6 +4066,7 @@ pub fn run() {
             environment_get,
             environment_detect,
             environment_save,
+            preview_first_request,
             global_rules_list,
             global_rule_create,
             global_rule_update,

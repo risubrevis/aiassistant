@@ -851,6 +851,24 @@ export const environmentDetect = () => invoke<string>("environment_detect");
 export const setAddEnvironmentInfo = (value: boolean) =>
   invoke<void>("set_add_environment_info", { value });
 
+export interface ToolPreview {
+  name: string;
+  description: string;
+}
+
+export interface FirstRequestPreview {
+  mode: string;
+  system_prompt: string;
+  tools: ToolPreview[];
+  tools_json: string;
+  system_tokens: number;
+  tools_tokens: number;
+  total_tokens: number;
+}
+
+export const previewFirstRequest = () =>
+  invoke<FirstRequestPreview>("preview_first_request");
+
 export type WebSearchProviderKind =
   | "scrape"
   | "brave_api"

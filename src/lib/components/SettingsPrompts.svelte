@@ -2,7 +2,8 @@
   import { onMount } from "svelte";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
-  import { Check } from "@lucide/svelte";
+  import { Check, Eye } from "@lucide/svelte";
+  import SystemPromptPreviewModal from "./SystemPromptPreviewModal.svelte";
   import {
     configGet,
     setSystemPrompt,
@@ -32,6 +33,7 @@
   let saving = $state(false);
   let detecting = $state(false);
   let justSaved = $state(false);
+  let previewOpen = $state(false);
   let savedTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Mirrors `DEFAULT_SYSTEM_PROMPT` in src-tauri/src/config/model.rs. Used to
@@ -219,7 +221,12 @@ Guidelines:
   </section>
 
   <div class="footer">
+    <button class="btn ghost" onclick={() => (previewOpen = true)} disabled={saving}>
+      <Eye size={14} />
+      {m.settings_prompts_preview()}
+    </button>
     {#if justSaved}<span class="saved-check" title={m.settings_prompts_saved()}><Check size={12} /></span>{/if}
+    <div class="spacer"></div>
     <button class="btn" onclick={cancel} disabled={!dirty || saving}>
       {m.common_cancel()}
     </button>
@@ -228,6 +235,8 @@ Guidelines:
     </button>
   </div>
 </div>
+
+<SystemPromptPreviewModal open={previewOpen} onclose={() => (previewOpen = false)} />
 
 <style>
   .prompts {
@@ -329,9 +338,11 @@ Guidelines:
     border-top: 1px solid var(--border);
   }
   .saved-check {
-    margin-right: auto;
     display: inline-flex;
     color: hsl(142 71% 45%);
+  }
+  .spacer {
+    flex: 1;
   }
   .btn {
     display: inline-flex;
@@ -359,5 +370,8 @@ Guidelines:
   .btn.primary:hover:not(:disabled) {
     opacity: 0.9;
     background: var(--primary);
+  }
+  .btn.ghost {
+    background: transparent;
   }
 </style>

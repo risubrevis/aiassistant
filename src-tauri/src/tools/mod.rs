@@ -144,6 +144,11 @@ impl Registry {
         self.tools.push(tool);
     }
 
+    /// Specs of all registered tools (name + description + parameters).
+    pub fn specs(&self) -> Vec<ToolSpec> {
+        self.tools.iter().map(|t| t.spec()).collect()
+    }
+
     /// OpenAI `tools` array (`[{type:"function", function:{...}}]`).
     pub fn openai_tools(&self) -> Value {
         Value::Array(
