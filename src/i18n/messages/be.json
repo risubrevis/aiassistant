@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Паспрабаваць аўтаматычна вызначыць звесткі пра асяроддзе",
   "settings_prompts_env_detecting": "Выяўленне…",
   "settings_prompts_env_placeholder": "АС, працоўнае асяроддзе, абалонка, працэсар, памяць, відэакарта, мадэль камп'ютара…",
+  "settings_prompts_env_heading": "Інфармацыя пра асяроддзе",
+  "settings_prompts_save_failed": "Не ўдалося захаваць налады",
   "settings_web_search_title": "Правайдары вебпошуку",
   "settings_web_search_hint": "Рушкі, якія інструмент web_search пробуе па чарзе. URL павінен змяшчаць запаўняльнік {query}.",
   "settings_web_search_add": "Дадаць правайдара",

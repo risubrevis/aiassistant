@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { m } from "$lib/i18n";
+  import { toast } from "$lib/stores/toasts";
+  import { Check } from "@lucide/svelte";
   import {
     configGet,
     setSystemPrompt,
@@ -12,20 +14,25 @@
     setAddEnvironmentInfo,
   } from "$lib/tauri";
 
+  // Form state — local edits, committed to the backend by save().
   let systemPrompt = $state("");
-  let systemPromptSaved = $state("");
   let collapsePct = $state(90);
   let autoPull = $state(true);
-  let promptSaved = $state(false);
-  let promptSaving = $state(false);
-  let promptError = $state("");
   let addEnvInfo = $state(true);
   let envInfo = $state("");
-  let envInfoSaved = $state("");
-  let envInfoSaving = $state(false);
-  let envInfoDetecting = $state(false);
-  let envInfoSavedFlash = $state(false);
-  let envInfoError = $state("");
+
+  // Pristine snapshots — last values confirmed by the backend.
+  // Used by cancel() to revert local edits and by the derived `dirty` flag.
+  let lastSystemPrompt = $state("");
+  let lastCollapsePct = $state(90);
+  let lastAutoPull = $state(true);
+  let lastAddEnvInfo = $state(true);
+  let lastEnvInfo = $state("");
+
+  let saving = $state(false);
+  let detecting = $state(false);
+  let justSaved = $state(false);
+  let savedTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Mirrors `DEFAULT_SYSTEM_PROMPT` in src-tauri/src/config/model.rs. Used to
   // pre-fill the field for configs that predate the default (system_prompt == "").
@@ -38,147 +45,132 @@ Guidelines:
 - Use the available tools when they help, and briefly state what you are doing.
 - When unsure about facts, say so rather than fabricating.`;
 
-  let savedTimer: ReturnType<typeof setTimeout> | undefined;
-  let envSavedTimer: ReturnType<typeof setTimeout> | undefined;
-
-  let promptDirty = $derived(systemPrompt !== systemPromptSaved);
-  let envDirty = $derived(envInfo !== envInfoSaved);
+  // A single dirty flag for the whole page: any local field diverging from
+  // its pristine snapshot makes the form editable.
+  const dirty = $derived(
+    systemPrompt !== lastSystemPrompt ||
+      collapsePct !== lastCollapsePct ||
+      autoPull !== lastAutoPull ||
+      addEnvInfo !== lastAddEnvInfo ||
+      envInfo !== lastEnvInfo,
+  );
 
   onMount(() => {
     void load();
     return () => {
-      clearTimeout(savedTimer);
-      clearTimeout(envSavedTimer);
+      if (savedTimer) clearTimeout(savedTimer);
     };
   });
 
   async function load() {
     try {
       const config = await configGet();
-      systemPrompt = systemPromptSaved = config.defaults.system_prompt || DEFAULT_SYSTEM_PROMPT;
-      collapsePct = config.defaults.auto_collapse_context_pct ?? 90;
-      autoPull = config.defaults.auto_pull_changes ?? true;
-      addEnvInfo = config.defaults.add_environment_info ?? true;
-      envInfo = envInfoSaved = await environmentGet();
+      systemPrompt = lastSystemPrompt =
+        config.defaults.system_prompt || DEFAULT_SYSTEM_PROMPT;
+      collapsePct = lastCollapsePct = config.defaults.auto_collapse_context_pct ?? 90;
+      autoPull = lastAutoPull = config.defaults.auto_pull_changes ?? true;
+      addEnvInfo = lastAddEnvInfo = config.defaults.add_environment_info ?? true;
+      envInfo = lastEnvInfo = await environmentGet();
     } catch (e) {
-      promptError = String(e);
+      toast.error(m.settings_prompts_save_failed(), String(e));
     }
   }
 
-  async function savePrompt() {
-    promptSaving = true;
+  // Persist every field in one pass. Values are captured into consts before
+  // any await: backend setters emit `config:reloaded` / reload events that can
+  // overwrite local state mid-flight.
+  async function save() {
+    const sp = systemPrompt;
+    const cp = collapsePct;
+    const ap = autoPull;
+    const aei = addEnvInfo;
+    const ei = envInfo;
+    saving = true;
     try {
-      await setSystemPrompt(systemPrompt);
-      systemPromptSaved = systemPrompt;
-      promptError = "";
-      promptSaved = true;
-      clearTimeout(savedTimer);
-      savedTimer = setTimeout(() => (promptSaved = false), 1500);
+      await setSystemPrompt(sp);
+      await setAutoCollapseContextPct(cp);
+      await setAutoPullChanges(ap);
+      await setAddEnvironmentInfo(aei);
+      await environmentSave(ei);
+      lastSystemPrompt = sp;
+      lastCollapsePct = cp;
+      lastAutoPull = ap;
+      lastAddEnvInfo = aei;
+      lastEnvInfo = ei;
+      toast.success(m.settings_prompts_saved());
+      justSaved = true;
+      if (savedTimer) clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => (justSaved = false), 1800);
     } catch (e) {
-      promptSaved = false;
-      promptError = String(e);
+      toast.error(m.settings_prompts_save_failed(), String(e));
     } finally {
-      promptSaving = false;
+      saving = false;
     }
   }
 
-  function cancelPrompt() {
-    systemPrompt = systemPromptSaved;
-    promptError = "";
+  // Revert all local edits back to the last confirmed snapshots.
+  function cancel() {
+    systemPrompt = lastSystemPrompt;
+    collapsePct = lastCollapsePct;
+    autoPull = lastAutoPull;
+    addEnvInfo = lastAddEnvInfo;
+    envInfo = lastEnvInfo;
   }
 
-  async function saveCollapse(value: number) {
-    try {
-      await setAutoCollapseContextPct(value);
-      promptError = "";
-    } catch (e) {
-      promptError = String(e);
-    }
-  }
-
-  async function saveAutoPull(value: boolean) {
-    try {
-      await setAutoPullChanges(value);
-      promptError = "";
-    } catch (e) {
-      promptError = String(e);
-    }
-  }
-
-  async function saveEnvInfo() {
-    envInfoSaving = true;
-    try {
-      await environmentSave(envInfo);
-      envInfoSaved = envInfo;
-      envInfoError = "";
-      envInfoSavedFlash = true;
-      clearTimeout(envSavedTimer);
-      envSavedTimer = setTimeout(() => (envInfoSavedFlash = false), 1500);
-    } catch (e) {
-      envInfoError = String(e);
-    } finally {
-      envInfoSaving = false;
-    }
-  }
-
-  function cancelEnvInfo() {
-    envInfo = envInfoSaved;
-    envInfoError = "";
-  }
-
+  // Auto-detect fills the env-info textarea; the result is a local edit that
+  // the user confirms with the page-wide Save button.
   async function detectEnvInfo() {
-    envInfoDetecting = true;
+    detecting = true;
     try {
       envInfo = await environmentDetect();
-      envInfoError = "";
     } catch (e) {
-      envInfoError = String(e);
+      toast.error(m.settings_prompts_save_failed(), String(e));
     } finally {
-      envInfoDetecting = false;
-    }
-  }
-
-  async function saveAddEnvInfo(value: boolean) {
-    addEnvInfo = value;
-    try {
-      await setAddEnvironmentInfo(value);
-      envInfoError = "";
-    } catch (e) {
-      envInfoError = String(e);
+      detecting = false;
     }
   }
 
   function onPromptKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      void savePrompt();
+      if (dirty && !saving) void save();
     }
   }
-
 </script>
 
 <div class="prompts">
-  <section class="section">
-    <div class="sec-head">
-      <span class="sec-title">{m.settings_prompts_env_title()}</span>
+  <section class="card">
+    <div class="card-head">
+      <span class="card-heading">{m.settings_prompts_system_prompt()}</span>
+    </div>
+    <p class="hint">{m.settings_prompts_system_prompt_hint()}</p>
+    <textarea
+      class="prompt-area"
+      bind:value={systemPrompt}
+      rows="6"
+      spellcheck="false"
+      disabled={saving}
+      onkeydown={onPromptKeydown}
+    ></textarea>
+  </section>
+
+  <section class="card" class:disabled={!addEnvInfo}>
+    <div class="card-head">
+      <span class="card-heading">{m.settings_prompts_env_heading()}</span>
+    </div>
+    <p class="hint">{m.settings_prompts_env_hint()}</p>
+    <label class="toggle-row">
       <input
-        class="toggle"
         type="checkbox"
         checked={addEnvInfo}
-        onchange={(e) => void saveAddEnvInfo(e.currentTarget.checked)}
+        disabled={saving}
+        onchange={(e) => (addEnvInfo = e.currentTarget.checked)}
       />
-    </div>
-    <div class="hint">{m.settings_prompts_env_hint()}</div>
+      <span class="toggle-label">{m.settings_prompts_env_title()}</span>
+    </label>
     <div class="env-actions">
-      <button class="btn" disabled={envInfoDetecting} onclick={() => void detectEnvInfo()}>
-        {envInfoDetecting ? m.settings_prompts_env_detecting() : m.settings_prompts_env_detect()}
-      </button>
-      <span class="spacer"></span>
-      <button class="btn" disabled={!envDirty || envInfoSaving} onclick={() => void saveEnvInfo()}>
-        {m.common_save()}
-      </button>
-      <button class="btn" disabled={!envDirty || envInfoSaving} onclick={cancelEnvInfo}>
-        {m.common_cancel()}
+      <button class="btn" disabled={detecting || saving} onclick={() => void detectEnvInfo()}>
+        {detecting ? m.settings_prompts_env_detecting() : m.settings_prompts_env_detect()}
       </button>
     </div>
     <textarea
@@ -186,44 +178,17 @@ Guidelines:
       bind:value={envInfo}
       rows="8"
       spellcheck="false"
+      disabled={saving}
       placeholder={m.settings_prompts_env_placeholder()}
     ></textarea>
-    <div class="status">
-      {#if envInfoSavedFlash}<span class="saved">{m.settings_prompts_saved()}</span>
-      {:else if envInfoError}<span class="err">{envInfoError}</span>{/if}
-    </div>
   </section>
 
-  <section class="section">
-    <div class="sec-head">
-      <span class="sec-title">{m.settings_prompts_system_prompt()}</span>
-    </div>
-    <div class="hint">{m.settings_prompts_system_prompt_hint()}</div>
-    <div class="env-actions">
-      <button class="btn" disabled={!promptDirty || promptSaving} onclick={() => void savePrompt()}>
-        {m.common_save()}
-      </button>
-      <button class="btn" disabled={!promptDirty || promptSaving} onclick={cancelPrompt}>
-        {m.common_cancel()}
-      </button>
-    </div>
-    <textarea
-      class="prompt-area"
-      bind:value={systemPrompt}
-      rows="6"
-      spellcheck="false"
-      onkeydown={onPromptKeydown}
-    ></textarea>
-    <div class="status">
-      {#if promptSaved}<span class="saved">{m.settings_prompts_saved()}</span>
-      {:else if promptError}<span class="err">{promptError}</span>{/if}
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="sec-head">
-      <span class="sec-title">{m.settings_prompts_compaction()}</span>
-      <span class="collapse-val">{collapsePct === 0 ? m.settings_prompts_compaction_off() : `${collapsePct}%`}</span>
+  <section class="card">
+    <div class="card-head">
+      <span class="card-heading">{m.settings_prompts_compaction()}</span>
+      <span class="collapse-val">
+        {collapsePct === 0 ? m.settings_prompts_compaction_off() : `${collapsePct}%`}
+      </span>
     </div>
     <input
       class="slider"
@@ -232,132 +197,167 @@ Guidelines:
       max="100"
       step="5"
       value={collapsePct}
+      disabled={saving}
       oninput={(e) => (collapsePct = Number((e.currentTarget as HTMLInputElement).value))}
-      onchange={(e) => void saveCollapse(Number((e.currentTarget as HTMLInputElement).value))}
     />
-    <div class="hint">{m.settings_prompts_compaction_hint()}</div>
+    <p class="hint">{m.settings_prompts_compaction_hint()}</p>
   </section>
 
-  <section class="section">
-    <div class="sec-head">
-      <span class="sec-title">{m.settings_prompts_auto_pull()}</span>
-      <input
-        class="toggle"
-        type="checkbox"
-        checked={autoPull}
-        onchange={(e) => {
-          autoPull = e.currentTarget.checked;
-          void saveAutoPull(autoPull);
-        }}
-      />
+  <section class="card">
+    <div class="card-head">
+      <label class="toggle">
+        <input
+          type="checkbox"
+          checked={autoPull}
+          disabled={saving}
+          onchange={(e) => (autoPull = e.currentTarget.checked)}
+        />
+        <span class="toggle-label">{m.settings_prompts_auto_pull()}</span>
+      </label>
     </div>
-    <div class="hint">{m.settings_prompts_auto_pull_hint()}</div>
+    <p class="hint">{m.settings_prompts_auto_pull_hint()}</p>
   </section>
+
+  <div class="footer">
+    {#if justSaved}<span class="saved-check" title={m.settings_prompts_saved()}><Check size={12} /></span>{/if}
+    <button class="btn" onclick={cancel} disabled={!dirty || saving}>
+      {m.common_cancel()}
+    </button>
+    <button class="btn primary" onclick={() => void save()} disabled={!dirty || saving}>
+      {saving ? "…" : m.common_save()}
+    </button>
+  </div>
 </div>
 
 <style>
   .prompts {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 1rem;
+    min-height: 100%;
   }
-  .section {
+  .card {
     display: flex;
     flex-direction: column;
-    gap: 0.45rem;
+    gap: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 0.875rem;
   }
-  .sec-title {
+  .card.disabled {
+    opacity: 0.65;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .card-heading {
     font-size: 0.8125rem;
     font-weight: 600;
   }
-  .sec-head {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    column-gap: 0.75rem;
+  .hint {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--muted-foreground);
+    line-height: 1.35;
   }
   .collapse-val {
     font-size: 0.75rem;
     color: var(--muted-foreground);
     font-variant-numeric: tabular-nums;
   }
-  .slider {
-    width: 100%;
-    accent-color: var(--primary);
-    cursor: default;
+  .toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8125rem;
   }
   .toggle {
-    width: auto;
-    padding: 0;
-    border: none;
-    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+  }
+  .toggle input,
+  .toggle-row input {
+    width: 0.95rem;
+    height: 0.95rem;
     accent-color: var(--primary);
     cursor: default;
-  }
-  .hint {
-    font-size: 0.7rem;
-    color: var(--muted-foreground);
   }
   .env-actions {
     display: flex;
     align-items: center;
     gap: 0.5rem;
   }
-  .status {
-    min-height: 0.95rem;
-    font-size: 0.7rem;
-  }
-  .saved {
-    color: hsl(140 60% 40%);
-  }
-  .err {
-    font-size: 0.72rem;
-    color: var(--destructive);
-    overflow-wrap: anywhere;
-  }
-  input,
-  textarea {
+  .slider {
     width: 100%;
-    padding: 0.3rem 0.5rem;
+    accent-color: var(--primary);
+    cursor: default;
+  }
+  .prompt-area {
+    width: 100%;
+    padding: 0.4rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--background);
     color: var(--foreground);
     font-size: 0.8125rem;
-    font-family: var(--font-sans);
+    font-family: var(--font-mono);
+    resize: vertical;
     outline: none;
   }
-  input:focus,
-  textarea:focus {
+  .prompt-area:focus {
     border-color: var(--ring);
   }
-  textarea {
-    resize: vertical;
-    font-family: var(--font-mono);
+  .prompt-area:disabled {
+    opacity: 0.6;
+  }
+  .footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: auto;
+    padding: 0.6rem 0 0.25rem;
+    background: var(--background);
+    border-top: 1px solid var(--border);
+  }
+  .saved-check {
+    margin-right: auto;
+    display: inline-flex;
+    color: hsl(142 71% 45%);
   }
   .btn {
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    padding: 0.28rem 0.7rem;
+    padding: 0.35rem 0.85rem;
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--background);
     color: var(--foreground);
-    font-size: 0.78rem;
+    font-size: 0.8125rem;
     cursor: default;
   }
-  .btn:hover {
+  .btn:disabled {
+    opacity: 0.5;
+  }
+  .btn:hover:not(:disabled) {
     background: var(--accent);
   }
-  .btn:disabled,
-  .btn:disabled:hover {
-    opacity: 0.5;
-    cursor: default;
-    background: var(--background);
+  .btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-foreground);
   }
-  .spacer {
-    flex: 1;
+  .btn.primary:hover:not(:disabled) {
+    opacity: 0.9;
+    background: var(--primary);
   }
 </style>

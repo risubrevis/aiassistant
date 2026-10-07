@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Essayer la détection auto des informations d'environnement",
   "settings_prompts_env_detecting": "Détection…",
   "settings_prompts_env_placeholder": "OS, environnement de bureau, shell, CPU, mémoire, GPU, modèle d'ordinateur…",
+  "settings_prompts_env_heading": "Informations sur l'environnement",
+  "settings_prompts_save_failed": "Échec de l'enregistrement des paramètres",
   "settings_web_search_title": "Fournisseurs de recherche web",
   "settings_web_search_hint": "Moteurs essayés par l'outil web_search, dans l'ordre. L'URL doit contenir le placeholder {query}.",
   "settings_web_search_add": "Ajouter un fournisseur",

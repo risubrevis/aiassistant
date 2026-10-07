@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Определить информацию об окружении",
   "settings_prompts_env_detecting": "Определение…",
   "settings_prompts_env_placeholder": "ОС, графическое окружение, оболочка, процессор, память, GPU, модель компьютера…",
+  "settings_prompts_env_heading": "Информация об окружении",
+  "settings_prompts_save_failed": "Не удалось сохранить настройки",
   "settings_web_search_title": "Поисковые системы",
   "settings_web_search_hint": "Поисковики, перебираемые инструментом web_search по порядку. В URL должен быть плейсхолдер {query}.",
   "settings_web_search_add": "Добавить поисковик",

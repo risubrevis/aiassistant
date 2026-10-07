@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Спробувати автоматично визначити відомості про середовище",
   "settings_prompts_env_detecting": "Визначення…",
   "settings_prompts_env_placeholder": "ОС, стільничне середовище, оболонка, CPU, пам'ять, GPU, модель комп'ютера…",
+  "settings_prompts_env_heading": "Інформація про середовище",
+  "settings_prompts_save_failed": "Не вдалося зберегти налаштування",
   "settings_web_search_title": "Провайдери вебпошуку",
   "settings_web_search_hint": "Пошукові системи, які по черзі використовує інструмент web_search. URL має містити заповнювач {query}.",
   "settings_web_search_add": "Додати провайдера",

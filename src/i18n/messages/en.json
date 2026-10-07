@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Try auto-detect environment information",
   "settings_prompts_env_detecting": "Detecting…",
   "settings_prompts_env_placeholder": "OS, desktop environment, shell, CPU, memory, GPU, computer model…",
+  "settings_prompts_env_heading": "Environment Information",
+  "settings_prompts_save_failed": "Failed to save settings",
   "settings_web_search_title": "Web Search Providers",
   "settings_web_search_hint": "Engines tried by the web_search tool, in order. The URL must contain the {query} placeholder.",
   "settings_web_search_add": "Add Provider",

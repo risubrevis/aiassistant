@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Spróbuj automatycznie wykryć informacje o środowisku",
   "settings_prompts_env_detecting": "Wykrywanie…",
   "settings_prompts_env_placeholder": "System operacyjny, środowisko pulpitu, powłoka, CPU, pamięć, GPU, model komputera…",
+  "settings_prompts_env_heading": "Informacje o środowisku",
+  "settings_prompts_save_failed": "Nie udało się zapisać ustawień",
   "settings_web_search_title": "Dostawcy wyszukiwania w sieci",
   "settings_web_search_hint": "Wyszukiwarki wypróbowywane po kolei przez narzędzie web_search. URL musi zawierać placeholder {query}.",
   "settings_web_search_add": "Dodaj dostawcę",

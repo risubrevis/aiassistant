@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Umgebungsinfos automatisch erkennen",
   "settings_prompts_env_detecting": "Wird erkannt…",
   "settings_prompts_env_placeholder": "Betriebssystem, Desktop-Umgebung, Shell, CPU, RAM, GPU, Computermodell…",
+  "settings_prompts_env_heading": "Umgebungsinformationen",
+  "settings_prompts_save_failed": "Einstellungen konnten nicht gespeichert werden",
   "settings_web_search_title": "Websuche-Anbieter",
   "settings_web_search_hint": "Suchmaschinen, die vom web_search-Tool der Reihe nach durchprobiert werden. Die URL muss den Platzhalter {query} enthalten.",
   "settings_web_search_add": "Anbieter hinzufügen",

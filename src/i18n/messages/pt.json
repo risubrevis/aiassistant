@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Tentar detectar automaticamente as informações do ambiente",
   "settings_prompts_env_detecting": "Detectando…",
   "settings_prompts_env_placeholder": "SO, ambiente de desktop, shell, CPU, memória, GPU, modelo do computador…",
+  "settings_prompts_env_heading": "Informações do ambiente",
+  "settings_prompts_save_failed": "Falha ao salvar as configurações",
   "settings_web_search_title": "Provedores de busca na web",
   "settings_web_search_hint": "Mecanismos de busca usados pela ferramenta web_search, nesta ordem. A URL deve conter o marcador {query}.",
   "settings_web_search_add": "Adicionar provedor",

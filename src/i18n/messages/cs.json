@@ -172,6 +172,8 @@
   "settings_prompts_env_detect": "Zkusit automaticky rozpoznat informace o prostředí",
   "settings_prompts_env_detecting": "Rozpoznávání…",
   "settings_prompts_env_placeholder": "OS, desktopové prostředí, shell, CPU, paměť, GPU, model počítače…",
+  "settings_prompts_env_heading": "Informace o prostředí",
+  "settings_prompts_save_failed": "Nepodařilo se uložit nastavení",
   "settings_web_search_title": "Poskytovatelé webového vyhledávání",
   "settings_web_search_hint": "Vyhledávače, které nástroj web_search zkouší postupně v uvedeném pořadí. URL musí obsahovat zástupný symbol {query}.",
   "settings_web_search_add": "Přidat poskytovatele",
