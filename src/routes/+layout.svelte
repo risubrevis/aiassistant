@@ -11,6 +11,7 @@
     applyLanguageSetting,
   } from "$lib/stores/lang";
   import { toast } from "$lib/stores/toasts";
+    import Toaster from "$lib/components/Toaster.svelte";
   import { sendNotification } from "@tauri-apps/plugin-notification";
   import { m } from "$lib/i18n";
   import {
@@ -357,6 +358,7 @@
 
 {#if isSettingsWindow}
   <SettingsApp />
+  <Toaster />
 {:else}
   {@render children()}
 {/if}

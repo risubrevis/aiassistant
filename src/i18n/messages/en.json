@@ -72,6 +72,7 @@
   "settings_general_window": "Window",
   "settings_general_remember_window": "Remember window size and position",
   "settings_general_remember_window_hint": "Applied on the next app launch.",
+  "settings_models_defaults_heading": "Default Models",
   "settings_models_primary": "Primary (Default) Model",
   "settings_models_secondary": "Secondary (Fast) Model",
   "settings_models_secondary_hint": "Used for smart routing of simple turns (quick Q&A, light tool use) to a faster model. Falls back to the primary model when not set or when the task is complex.",

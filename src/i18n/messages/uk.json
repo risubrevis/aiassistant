@@ -72,6 +72,7 @@
   "settings_general_window": "Вікно",
   "settings_general_remember_window": "Запам'ятовувати розмір і положення вікна",
   "settings_general_remember_window_hint": "Застосується під час наступного запуску програми.",
+  "settings_models_defaults_heading": "Моделі за замовчуванням",
   "settings_models_primary": "Основна (типова) модель",
   "settings_models_secondary": "Додаткова (швидка) модель",
   "settings_models_secondary_hint": "Використовується для розумної маршрутизації простих ходів (швидкі запитання-відповіді, легка робота з інструментами) на швидшу модель. Якщо не задана або завдання складне, використовується основна модель.",

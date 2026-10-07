@@ -72,6 +72,7 @@
   "settings_general_window": "Fenêtre",
   "settings_general_remember_window": "Mémoriser la taille et la position de la fenêtre",
   "settings_general_remember_window_hint": "Appliqué au prochain lancement de l'app.",
+  "settings_models_defaults_heading": "Modèles par défaut",
   "settings_models_primary": "Modèle principal (par défaut)",
   "settings_models_secondary": "Modèle secondaire (rapide)",
   "settings_models_secondary_hint": "Sert au routage intelligent des tours simples (questions-réponses rapides, usage léger d'outils) vers un modèle plus rapide. Repli sur le modèle principal s'il n'est pas défini ou si la tâche est complexe.",

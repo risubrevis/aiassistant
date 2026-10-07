@@ -72,6 +72,7 @@
   "settings_general_window": "Okno",
   "settings_general_remember_window": "Zapamatovat velikost a pozici okna",
   "settings_general_remember_window_hint": "Použije se při příštím spuštění aplikace.",
+  "settings_models_defaults_heading": "Výchozí modely",
   "settings_models_primary": "Hlavní (výchozí) model",
   "settings_models_secondary": "Vedlejší (rychlý) model",
   "settings_models_secondary_hint": "Používá se pro chytré směrování jednoduchých tahů (rychlé dotazy a odpovědi, lehké použití nástrojů) na rychlejší model. Není-li nastaven nebo je-li úkol složitý, použije se hlavní model.",

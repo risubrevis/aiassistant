@@ -20,10 +20,12 @@
   } from "$lib/tauri";
   import { m } from "$lib/i18n";
   import { toast } from "$lib/stores/toasts";
+  import { Check } from "@lucide/svelte";
   import Select from "./Select.svelte";
 
   type SelectItem = { value: string; label: string; disabled?: boolean };
 
+  // Form state — local edits, committed to the backend by save().
   let primary = $state("");
   let secondary = $state("");
   let summarization = $state("");
@@ -34,29 +36,27 @@
   let visionEnabled = $state(false);
   let activeModels = $state<ModelOption[]>([]);
   let allModels = $state<ModelOption[]>([]);
-  let dirty = $state(false);
-  let ragDirty = $state(false);
-  let visionDirty = $state(false);
-  let summarizationDirty = $state(false);
-  let summarizationSaving = $state(false);
-  let saving = $state(false);
-  let ragSaving = $state(false);
-  let visionSaving = $state(false);
   let totalChunks = $state(0);
   let maxTurns = $state(50);
   let mtUnlimited = $state(false);
   let mtRestore = $state(50);
-  let mtDirty = $state(false);
-  let mtSaving = $state(false);
 
-  // Pristine snapshots used by the section Cancel buttons to revert local
-  // edits without a refetch. Refreshed from config on every sync.
-  let lastRagEnabled = $state(true);
+  // Pristine snapshots — last values confirmed by the backend config.
+  // Used by cancel() to revert local edits and by the derived `dirty` flag.
+  let lastPrimary = $state("");
+  let lastSecondary = $state("");
+  let lastRoutingEnabled = $state(true);
+  let lastSummarization = $state("");
   let lastEmbedding = $state("");
+  let lastRagEnabled = $state(true);
   let lastVisionEnabled = $state(false);
   let lastVision = $state("");
-  let lastSummarization = $state("");
   let lastMaxTurns = $state(50);
+
+  let saving = $state(false);
+  let ragClearing = $state(false);
+  let justSaved = $state(false);
+  let savedTimer: ReturnType<typeof setTimeout> | undefined;
 
   const NOT_SELECTED = "";
 
@@ -77,18 +77,36 @@
     maxTurns = cfg.defaults.max_turns ?? 50;
     mtUnlimited = maxTurns === 0;
     mtRestore = maxTurns === 0 ? 50 : maxTurns;
+    lastPrimary = primary;
+    lastSecondary = secondary;
+    lastRoutingEnabled = routingEnabled;
+    lastSummarization = summarization;
     lastEmbedding = embedding;
     lastRagEnabled = ragEnabled;
     lastVisionEnabled = visionEnabled;
     lastVision = vision;
-    lastSummarization = summarization;
     lastMaxTurns = maxTurns;
-    dirty = false;
-    ragDirty = false;
-    visionDirty = false;
-    summarizationDirty = false;
-    mtDirty = false;
   }
+
+  // A single dirty flag for the whole page: any local field diverging from
+  // its pristine snapshot makes the form editable.
+  const dirty = $derived(
+    primary !== lastPrimary ||
+      secondary !== lastSecondary ||
+      routingEnabled !== lastRoutingEnabled ||
+      summarization !== lastSummarization ||
+      embedding !== lastEmbedding ||
+      ragEnabled !== lastRagEnabled ||
+      vision !== lastVision ||
+      visionEnabled !== lastVisionEnabled ||
+      maxTurns !== lastMaxTurns,
+  );
+
+  // When there are no models at all and nothing is selected, the model cards
+  // are hidden (only the max-turns card and footer remain editable).
+  const modelsEmpty = $derived(
+    activeModels.length === 0 && !primary && !secondary && !embedding,
+  );
 
   async function loadModels() {
     try {
@@ -114,14 +132,14 @@
 
   async function clearAllRag() {
     if (!window.confirm(m.rag_clear_confirm())) return;
-    ragSaving = true;
+    ragClearing = true;
     try {
       await ragClearAll();
       await loadRagStatus();
     } catch (e) {
       toast.error(m.rag_cleared_msg(), String(e));
     } finally {
-      ragSaving = false;
+      ragClearing = false;
     }
   }
 
@@ -149,6 +167,7 @@
       unlistenRag?.();
       unlistenProviders?.();
       unlistenConfig?.();
+      if (savedTimer) clearTimeout(savedTimer);
     };
   });
 
@@ -195,121 +214,59 @@
     return { provider: v.slice(0, idx), model: v.slice(idx + 2) };
   }
 
+  // Save every field in one pass. Each backend setter emits `config:reloaded`,
+  // which triggers syncFromConfig and overwrites local state from the in-memory
+  // config mid-flight, so all values are captured into consts before any await.
   async function save() {
-    if (!primary) {
+    if (!modelsEmpty && !primary) {
       toast.error(m.settings_models_primary_required());
       return;
     }
-    // Capture all selections before any await: each setDefaultsModel emits
-    // `config:reloaded`, which triggers syncFromConfig and overwrites local
-    // state from the (not-yet-fully-saved) in-memory config.
-    const p = parseValue(primary)!;
+    const p = parseValue(primary);
     const s = parseValue(secondary);
+    const summ = parseValue(summarization);
+    const e = parseValue(embedding);
+    const v = parseValue(vision);
     const routing = routingEnabled;
+    const ragOn = ragEnabled;
+    const visionOn = visionEnabled;
+    const rawTurns = Math.floor(maxTurns);
+    const turns = rawTurns === 0 ? 0 : Math.max(1, Math.min(1000, rawTurns));
     saving = true;
     try {
-      await setDefaultsModel("main_model", p.provider, p.model);
+      await setDefaultsModel("main_model", p?.provider ?? null, p?.model ?? null);
       await setDefaultsModel("secondary_model", s?.provider ?? null, s?.model ?? null);
       await setSecondaryRoutingEnabled(routing);
-      dirty = false;
-      toast.success(m.settings_models_saved());
-    } catch (err) {
-      toast.error(m.settings_models_save_failed(), String(err));
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function reset() {
-    saving = true;
-    try {
-      await setDefaultsModel("main_model", null, null);
-      await setDefaultsModel("secondary_model", null, null);
-      await setSecondaryRoutingEnabled(true);
-      routingEnabled = true;
-      dirty = false;
-      toast.success(m.settings_models_reset());
-    } catch (err) {
-      toast.error(m.settings_models_save_failed(), String(err));
-    } finally {
-      saving = false;
-    }
-  }
-
-  function toggleRag() {
-    ragEnabled = !ragEnabled;
-    ragDirty = true;
-  }
-
-  function cancelRag() {
-    ragEnabled = lastRagEnabled;
-    embedding = lastEmbedding;
-    ragDirty = false;
-  }
-
-  async function saveRag() {
-    // Capture before any await (see save() above for rationale).
-    const e = parseValue(embedding);
-    const enabled = ragEnabled;
-    ragSaving = true;
-    try {
-      await setRagEnabled(enabled);
+      await setDefaultsModel("summarization_model", summ?.provider ?? null, summ?.model ?? null);
+      await setRagEnabled(ragOn);
       await setDefaultsModel("embedding_model", e?.provider ?? null, e?.model ?? null);
-      ragDirty = false;
-      toast.success(m.settings_models_saved());
-    } catch (err) {
-      toast.error(m.settings_models_save_failed(), String(err));
-    } finally {
-      ragSaving = false;
-    }
-  }
-
-  function toggleVision() {
-    visionEnabled = !visionEnabled;
-    visionDirty = true;
-  }
-
-  function cancelVision() {
-    visionEnabled = lastVisionEnabled;
-    vision = lastVision;
-    visionDirty = false;
-  }
-
-  async function saveVision() {
-    // Capture before any await (see save() above for rationale).
-    const v = parseValue(vision);
-    const enabled = visionEnabled;
-    visionSaving = true;
-    try {
-      await setVisionModelEnabled(enabled);
+      await setVisionModelEnabled(visionOn);
       await setDefaultsModel("vision_model", v?.provider ?? null, v?.model ?? null);
-      visionDirty = false;
+      await setMaxTurns(turns);
       toast.success(m.settings_models_saved());
+      justSaved = true;
+      if (savedTimer) clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => (justSaved = false), 1800);
     } catch (err) {
       toast.error(m.settings_models_save_failed(), String(err));
     } finally {
-      visionSaving = false;
+      saving = false;
     }
   }
 
-  function cancelSummarization() {
+  // Revert all local edits back to the last config-confirmed snapshots.
+  function cancel() {
+    primary = lastPrimary;
+    secondary = lastSecondary;
+    routingEnabled = lastRoutingEnabled;
     summarization = lastSummarization;
-    summarizationDirty = false;
-  }
-
-  async function saveSummarization() {
-    const s = parseValue(summarization);
-    summarizationSaving = true;
-    try {
-      await setDefaultsModel("summarization_model", s?.provider ?? null, s?.model ?? null);
-      summarizationDirty = false;
-      lastSummarization = summarization;
-      toast.success(m.settings_models_saved());
-    } catch (err) {
-      toast.error(m.settings_models_save_failed(), String(err));
-    } finally {
-      summarizationSaving = false;
-    }
+    embedding = lastEmbedding;
+    ragEnabled = lastRagEnabled;
+    vision = lastVision;
+    visionEnabled = lastVisionEnabled;
+    maxTurns = lastMaxTurns;
+    mtUnlimited = maxTurns === 0;
+    mtRestore = maxTurns === 0 ? 50 : maxTurns;
   }
 
   function toggleMaxTurnsUnlimited(e: Event) {
@@ -321,44 +278,21 @@
     } else {
       maxTurns = mtRestore;
     }
-    mtDirty = maxTurns !== lastMaxTurns;
   }
 
   function onMaxTurnsInput(e: Event) {
-    const v = Number((e.target as HTMLInputElement).value);
-    maxTurns = v;
-    mtDirty = v !== lastMaxTurns;
-  }
-
-  function cancelMaxTurns() {
-    maxTurns = lastMaxTurns;
-    mtUnlimited = maxTurns === 0;
-    mtDirty = false;
-  }
-
-  async function saveMaxTurns() {
-    const raw = Math.floor(maxTurns);
-    const v = raw === 0 ? 0 : Math.max(1, Math.min(1000, raw));
-    mtSaving = true;
-    try {
-      await setMaxTurns(v);
-      maxTurns = v;
-      lastMaxTurns = v;
-      mtDirty = false;
-      toast.success(m.settings_models_max_turns_saved());
-    } catch (err) {
-      toast.error(m.settings_models_max_turns_save_failed(), String(err));
-    } finally {
-      mtSaving = false;
-    }
+    maxTurns = Number((e.target as HTMLInputElement).value);
   }
 </script>
 
 <div class="models">
-  {#if activeModels.length === 0 && !primary && !secondary && !embedding}
+  {#if modelsEmpty}
     <div class="empty">{m.settings_models_empty()}</div>
   {:else}
-    <section class="block">
+    <section class="card">
+      <div class="card-head">
+        <span class="card-heading">{m.settings_models_defaults_heading()}</span>
+      </div>
       <div class="fields">
         <div class="field">
           <span class="label">{m.settings_models_primary()}</span>
@@ -367,10 +301,8 @@
             value={primary}
             items={primaryItems}
             placeholder={m.settings_models_not_selected()}
-            onchange={(v) => {
-              primary = v;
-              dirty = true;
-            }}
+            disabled={saving}
+            onchange={(v) => (primary = v)}
           />
         </div>
         <div class="field">
@@ -380,72 +312,49 @@
             value={secondary}
             items={secondaryOptions}
             placeholder={m.settings_models_not_selected()}
-            onchange={(v) => {
-              secondary = v;
-              dirty = true;
-            }}
+            disabled={saving}
+            onchange={(v) => (secondary = v)}
           />
-          <p class="rag-hint secondary-hint">{m.settings_models_secondary_hint()}</p>
+          <p class="hint">{m.settings_models_secondary_hint()}</p>
         </div>
       </div>
 
       {#if secondary}
-        <label class="rag-toggle">
+        <label class="toggle">
           <input
             type="checkbox"
             checked={routingEnabled}
-            onchange={(e) => {
-              routingEnabled = e.currentTarget.checked;
-              dirty = true;
-            }}
+            disabled={saving}
+            onchange={(e) => (routingEnabled = e.currentTarget.checked)}
           />
-          <span class="rag-toggle-label">{m.settings_models_routing()}</span>
+          <span class="toggle-label">{m.settings_models_routing()}</span>
         </label>
-        <p class="rag-hint">{m.settings_models_routing_hint()}</p>
+        <p class="hint">{m.settings_models_routing_hint()}</p>
       {/if}
-
-      <div class="actions">
-        <button class="btn primary" onclick={save} disabled={saving || !dirty}>
-          {saving ? "…" : m.common_save()}
-        </button>
-        <button class="btn ghost" onclick={reset} disabled={saving}>
-          {m.common_reset()}
-        </button>
-      </div>
     </section>
 
-    <section class="block summarization-section">
-      <div class="field">
-        <span class="label">{m.settings_models_summarization()}</span>
-        <Select
-          class="w-full"
-          value={summarization}
-          items={summarizationOptions}
-          placeholder={m.settings_models_not_selected()}
-          onchange={(v) => {
-            summarization = v;
-            summarizationDirty = true;
-          }}
-        />
-        <p class="rag-hint">{m.settings_models_summarization_hint()}</p>
+    <section class="card">
+      <div class="card-head">
+        <span class="card-heading">{m.settings_models_summarization()}</span>
       </div>
-      <div class="actions">
-        <button class="btn primary" onclick={saveSummarization} disabled={summarizationSaving || !summarizationDirty}>
-          {summarizationSaving ? "…" : m.common_save()}
-        </button>
-        <button class="btn ghost" onclick={cancelSummarization} disabled={summarizationSaving || !summarizationDirty}>
-          {m.common_cancel()}
-        </button>
-      </div>
+      <Select
+        class="w-full"
+        value={summarization}
+        items={summarizationOptions}
+        placeholder={m.settings_models_not_selected()}
+        disabled={saving}
+        onchange={(v) => (summarization = v)}
+      />
+      <p class="hint">{m.settings_models_summarization_hint()}</p>
     </section>
 
-    <section class="block rag-section" class:disabled={!ragEnabled}>
-      <div class="rag-head">
-        <label class="rag-toggle">
-          <input type="checkbox" checked={ragEnabled} onchange={toggleRag} />
-          <span class="rag-toggle-label">{m.settings_models_rag_section()}</span>
+    <section class="card" class:disabled={!ragEnabled}>
+      <div class="card-head">
+        <label class="toggle">
+          <input type="checkbox" checked={ragEnabled} disabled={saving} onchange={(e) => (ragEnabled = e.currentTarget.checked)} />
+          <span class="toggle-label">{m.settings_models_rag_section()}</span>
         </label>
-        <span class="rag-toggle-enabled">{m.settings_models_rag_enabled()}</span>
+        <span class="toggle-state">{ragEnabled ? m.settings_models_rag_enabled() : ""}</span>
       </div>
 
       <div class="field">
@@ -455,17 +364,14 @@
           value={embedding}
           items={embeddingOptions}
           placeholder={m.settings_models_not_selected()}
-          disabled={!ragEnabled}
+          disabled={saving || !ragEnabled}
           title={ragEnabled ? undefined : m.settings_models_rag_disabled_hint()}
-          onchange={(v) => {
-            embedding = v;
-            ragDirty = true;
-          }}
+          onchange={(v) => (embedding = v)}
         />
       </div>
 
       {#if !ragEnabled}
-        <p class="rag-hint">{m.settings_models_rag_disabled_hint()}</p>
+        <p class="hint">{m.settings_models_rag_disabled_hint()}</p>
       {/if}
 
       <div class="rag-clear">
@@ -473,28 +379,19 @@
           {totalChunks} {m.rag_chunks()}
           <span class="muted"> · {m.rag_clear_all_hint()}</span>
         </span>
-        <button class="btn danger" onclick={clearAllRag} disabled={ragSaving}>
-          {m.rag_clear_all()}
-        </button>
-      </div>
-
-      <div class="actions">
-        <button class="btn primary" onclick={saveRag} disabled={ragSaving || !ragDirty}>
-          {ragSaving ? "…" : m.common_save()}
-        </button>
-        <button class="btn ghost" onclick={cancelRag} disabled={ragSaving || !ragDirty}>
-          {m.common_cancel()}
+        <button class="btn danger" onclick={clearAllRag} disabled={ragClearing}>
+          {ragClearing ? "…" : m.rag_clear_all()}
         </button>
       </div>
     </section>
 
-    <section class="block vision-section" class:disabled={!visionEnabled}>
-      <div class="rag-head">
-        <label class="rag-toggle">
-          <input type="checkbox" checked={visionEnabled} onchange={toggleVision} />
-          <span class="rag-toggle-label">{m.settings_models_vision_section()}</span>
+    <section class="card" class:disabled={!visionEnabled}>
+      <div class="card-head">
+        <label class="toggle">
+          <input type="checkbox" checked={visionEnabled} disabled={saving} onchange={(e) => (visionEnabled = e.currentTarget.checked)} />
+          <span class="toggle-label">{m.settings_models_vision_section()}</span>
         </label>
-        <span class="rag-toggle-enabled">{m.settings_models_vision_enabled()}</span>
+        <span class="toggle-state">{visionEnabled ? m.settings_models_vision_enabled() : ""}</span>
       </div>
 
       <div class="field">
@@ -504,64 +401,55 @@
           value={vision}
           items={visionOptions}
           placeholder={m.settings_models_not_selected()}
-          disabled={!visionEnabled}
+          disabled={saving || !visionEnabled}
           title={visionEnabled ? undefined : m.settings_models_vision_disabled_hint()}
-          onchange={(v) => {
-            vision = v;
-            visionDirty = true;
-          }}
+          onchange={(v) => (vision = v)}
         />
       </div>
 
       {#if !visionEnabled}
-        <p class="rag-hint">{m.settings_models_vision_disabled_hint()}</p>
+        <p class="hint">{m.settings_models_vision_disabled_hint()}</p>
       {/if}
-
-      <div class="actions">
-        <button class="btn primary" onclick={saveVision} disabled={visionSaving || !visionDirty}>
-          {visionSaving ? "…" : m.common_save()}
-        </button>
-        <button class="btn ghost" onclick={cancelVision} disabled={visionSaving || !visionDirty}>
-          {m.common_cancel()}
-        </button>
-      </div>
     </section>
   {/if}
 
-  <section class="block max-turns-section">
-    <div class="field">
-      <span class="label">{m.settings_models_max_turns()}</span>
-      <div class="max-turns-row">
+  <section class="card">
+    <div class="card-head">
+      <span class="card-heading">{m.settings_models_max_turns()}</span>
+    </div>
+    <div class="max-turns-row">
+      <input
+        class="max-turns-input"
+        type="number"
+        min="1"
+        max="1000"
+        step="1"
+        value={maxTurns}
+        disabled={saving || mtUnlimited}
+        oninput={onMaxTurnsInput}
+      />
+      <label class="max-turns-unlimited">
         <input
-          class="max-turns-input"
-          type="number"
-          min="1"
-          max="1000"
-          step="1"
-          value={maxTurns}
-          disabled={mtUnlimited}
-          oninput={onMaxTurnsInput}
+          type="checkbox"
+          checked={mtUnlimited}
+          disabled={saving}
+          onchange={toggleMaxTurnsUnlimited}
         />
-        <div class="max-turns-unlimited">
-          <input
-            type="checkbox"
-            checked={mtUnlimited}
-            onchange={toggleMaxTurnsUnlimited}
-          />
-          <span>{m.settings_models_max_turns_unlimited()}</span>
-        </div>
-      </div>
-      <p class="max-turns-hint">{m.settings_models_max_turns_hint()}</p>
+        <span>{m.settings_models_max_turns_unlimited()}</span>
+      </label>
     </div>
-    <div class="actions">
-      <button class="btn primary" onclick={saveMaxTurns} disabled={mtSaving || !mtDirty}>
-        {mtSaving ? "…" : m.common_save()}
-      </button>
-      <button class="btn ghost" onclick={cancelMaxTurns} disabled={mtSaving || !mtDirty}>
-        {m.common_cancel()}
-      </button>
-    </div>
+    <p class="hint">{m.settings_models_max_turns_hint()}</p>
   </section>
+
+  <div class="footer">
+    {#if justSaved}<span class="saved-check" title={m.settings_models_saved()}><Check size={12} /></span>{/if}
+    <button class="btn" onclick={cancel} disabled={!dirty || saving}>
+      {m.common_cancel()}
+    </button>
+    <button class="btn primary" onclick={() => void save()} disabled={!dirty || saving}>
+      {saving ? "…" : m.common_save()}
+    </button>
+  </div>
 </div>
 
 <style>
@@ -569,11 +457,28 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    min-height: 100%;
   }
-  .block {
+  .card {
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.75rem 0.875rem;
+  }
+  .card.disabled {
+    opacity: 0.65;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .card-heading {
+    font-size: 0.8125rem;
+    font-weight: 600;
   }
   .fields {
     display: flex;
@@ -589,49 +494,34 @@
     font-size: 0.75rem;
     color: var(--muted-foreground);
   }
-  .actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 0.25rem;
+  .hint {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--muted-foreground);
+    line-height: 1.35;
   }
-  .btn {
+  .toggle {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    padding: 0.35rem 0.75rem;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--background);
+    gap: 0.4rem;
     font-size: 0.8125rem;
+    font-weight: 600;
     cursor: default;
   }
-  .btn:disabled {
-    opacity: 0.5;
+  .toggle input {
+    width: 0.95rem;
+    height: 0.95rem;
+    cursor: default;
   }
-  .btn.primary {
-    background: var(--primary);
-    color: var(--primary-foreground);
-    border-color: var(--primary);
-  }
-  .btn.ghost {
-    background: transparent;
-  }
-  .empty {
+  .toggle-state {
+    font-size: 0.72rem;
     color: var(--muted-foreground);
-    font-size: 0.8125rem;
-    padding: 0.5rem 0;
   }
-  .rag-section {
-    border-top: 1px solid var(--border);
-    padding-top: 0.75rem;
-  }
-  .vision-section {
-    border-top: 1px solid var(--border);
-    padding-top: 0.75rem;
-  }
-  .max-turns-section {
-    border-top: 1px solid var(--border);
-    padding-top: 0.75rem;
+  .max-turns-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
   }
   .max-turns-input {
     width: 8rem;
@@ -643,11 +533,8 @@
     font-size: 0.8125rem;
     font-variant-numeric: tabular-nums;
   }
-  .max-turns-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
+  .max-turns-input:disabled {
+    opacity: 0.5;
   }
   .max-turns-unlimited {
     display: inline-flex;
@@ -661,50 +548,12 @@
     height: 0.95rem;
     cursor: default;
   }
-  .max-turns-hint {
-    margin: 0;
-    font-size: 0.72rem;
-    color: var(--muted-foreground);
-    line-height: 1.35;
-  }
-  .rag-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-  }
-  .rag-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    cursor: default;
-  }
-  .rag-toggle input {
-    width: 0.95rem;
-    height: 0.95rem;
-    cursor: default;
-  }
-  .rag-toggle-enabled {
-    font-size: 0.72rem;
-    color: var(--muted-foreground);
-  }
-  .rag-hint {
-    margin: 0;
-    font-size: 0.72rem;
-    color: var(--muted-foreground);
-    line-height: 1.35;
-  }
-  .secondary-hint {
-    margin-top: 0.15rem;
-  }
   .rag-clear {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
-    padding-top: 0.25rem;
+    padding-top: 0.4rem;
     border-top: 1px solid var(--border);
     font-size: 0.75rem;
   }
@@ -714,6 +563,55 @@
   }
   .rag-clear-info .muted {
     opacity: 0.8;
+  }
+  .empty {
+    color: var(--muted-foreground);
+    font-size: 0.8125rem;
+    padding: 0.5rem 0;
+  }
+  .footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: auto;
+    padding: 0.6rem 0 0.25rem;
+    background: var(--background);
+    border-top: 1px solid var(--border);
+  }
+  .saved-check {
+    margin-right: auto;
+    display: inline-flex;
+    color: hsl(142 71% 45%);
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.35rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 0.8125rem;
+    cursor: default;
+  }
+  .btn:disabled {
+    opacity: 0.5;
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--accent);
+  }
+  .btn.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+  .btn.primary:hover:not(:disabled) {
+    opacity: 0.9;
+    background: var(--primary);
   }
   .btn.danger {
     color: var(--destructive);

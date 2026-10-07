@@ -72,6 +72,7 @@
   "settings_general_window": "Акно",
   "settings_general_remember_window": "Запамінаць памер і становішча акна",
   "settings_general_remember_window_hint": "Будзе ўжыта пры наступным запуску праграмы.",
+  "settings_models_defaults_heading": "Мадэлі па змаўчанні",
   "settings_models_primary": "Асноўная (прадвызначаная) мадэль",
   "settings_models_secondary": "Дадатковая (хуткая) мадэль",
   "settings_models_secondary_hint": "Выкарыстоўваецца для разумнай маршрутызацыі простых хадаў (хуткія пытанні-адказы, лёгкая работа з інструментамі) на хутчэйшую мадэль. Калі не зададзена ці задача складаная, выкарыстоўваецца асноўная мадэль.",

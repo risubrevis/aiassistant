@@ -72,6 +72,7 @@
   "settings_general_window": "Fenster",
   "settings_general_remember_window": "Fenstergröße und -position speichern",
   "settings_general_remember_window_hint": "Wird beim nächsten App-Start angewendet.",
+  "settings_models_defaults_heading": "Standardmodelle",
   "settings_models_primary": "Primärmodell (Standard)",
   "settings_models_secondary": "Sekundärmodell (schnell)",
   "settings_models_secondary_hint": "Wird für Smart-Routing einfacher Züge (schnelle Frage-Antwort-Runden, leichte Tool-Nutzung) an ein schnelleres Modell verwendet. Fällt auf das Primärmodell zurück, wenn es nicht gesetzt ist oder die Aufgabe komplex ist.",

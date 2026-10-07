@@ -72,6 +72,7 @@
   "settings_general_window": "Janela",
   "settings_general_remember_window": "Lembrar tamanho e posição da janela",
   "settings_general_remember_window_hint": "Será aplicado na próxima inicialização do aplicativo.",
+  "settings_models_defaults_heading": "Modelos padrão",
   "settings_models_primary": "Modelo principal (padrão)",
   "settings_models_secondary": "Modelo secundário (rápido)",
   "settings_models_secondary_hint": "Usado para o roteamento inteligente de turnos simples (perguntas e respostas rápidas, uso leve de ferramentas) para um modelo mais rápido. Volta ao modelo principal se não estiver definido ou se a tarefa for complexa.",

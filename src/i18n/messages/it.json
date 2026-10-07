@@ -72,6 +72,7 @@
   "settings_general_window": "Finestra",
   "settings_general_remember_window": "Ricorda dimensione e posizione della finestra",
   "settings_general_remember_window_hint": "Verrà applicato al prossimo avvio dell'app.",
+  "settings_models_defaults_heading": "Modelli predefiniti",
   "settings_models_primary": "Modello principale (predefinito)",
   "settings_models_secondary": "Modello secondario (veloce)",
   "settings_models_secondary_hint": "Usato per l'instradamento intelligente dei turni semplici (domande e risposte rapide, uso leggero degli strumenti) a un modello più veloce. Torna al modello principale se non è impostato o se l'attività è complessa.",

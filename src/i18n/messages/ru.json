@@ -72,6 +72,7 @@
   "settings_general_window": "Окно",
   "settings_general_remember_window": "Запоминать размер и положение окна",
   "settings_general_remember_window_hint": "Применится при следующем запуске приложения.",
+  "settings_models_defaults_heading": "Модели по умолчанию",
   "settings_models_primary": "Основная (по умолчанию) модель",
   "settings_models_secondary": "Вторая (быстрая) модель",
   "settings_models_secondary_hint": "Используется для умной маршрутизации простых ходов (быстрые вопросы-ответы, лёгкая работа с инструментами) на более быструю модель. Если не задана или задача сложная, используется основная модель.",

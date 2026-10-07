@@ -72,6 +72,7 @@
   "settings_general_window": "Ventana",
   "settings_general_remember_window": "Recordar tamaño y posición de la ventana",
   "settings_general_remember_window_hint": "Se aplicará en el próximo inicio de la app.",
+  "settings_models_defaults_heading": "Modelos predeterminados",
   "settings_models_primary": "Modelo principal (por defecto)",
   "settings_models_secondary": "Modelo secundario (rápido)",
   "settings_models_secondary_hint": "Se usa para enrutar de forma inteligente los turnos simples (preguntas y respuestas rápidas, uso ligero de herramientas) a un modelo más rápido. Vuelve al modelo principal si no está configurado o si la tarea es compleja.",

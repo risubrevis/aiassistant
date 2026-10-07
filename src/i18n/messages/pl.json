@@ -72,6 +72,7 @@
   "settings_general_window": "Okno",
   "settings_general_remember_window": "Zapamiętaj rozmiar i pozycję okna",
   "settings_general_remember_window_hint": "Zostanie zastosowane przy następnym uruchomieniu aplikacji.",
+  "settings_models_defaults_heading": "Modele domyślne",
   "settings_models_primary": "Model główny (domyślny)",
   "settings_models_secondary": "Model pomocniczy (szybki)",
   "settings_models_secondary_hint": "Używany do inteligentnego routingu prostych tur (szybkie pytania i odpowiedzi, lekkie używanie narzędzi) do szybszego modelu. Gdy nie jest ustawiony lub zadanie jest złożone, używany jest model główny.",
