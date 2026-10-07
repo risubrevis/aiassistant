@@ -3,9 +3,22 @@ use sqlx::SqlitePool;
 use crate::config::{environment_path, Config};
 use crate::db::models::{self, Chat, Project};
 
+/// App-level guidance injected into the system prompt so the model knows how to
+/// embed media and links in a way the chat UI renders (images, inline video/audio
+/// players, clickable links that open in the browser/system). App-injected, not
+/// user-editable — analogous to the environment-info block.
+const MEDIA_AND_LINKS_GUIDANCE: &str = r#"How to show media and links in your replies (the chat UI renders Markdown):
+- Images: embed inline with ![alt text](URL). URL may be a web URL (https://…) or a local file path — an absolute path such as /home/user/photo.png or C:\Users\me\photo.png, or a file:/// URL. The user can click an image to view it full-screen.
+- Video: write a Markdown link [title](URL) whose URL ends in a video file extension (.mp4, .webm, .mov, .mkv, .avi, .ogv, .m4v). It renders as an inline video player.
+- Audio: write a Markdown link [title](URL) whose URL ends in an audio file extension (.mp3, .wav, .flac, .m4a, .aac, .ogg, .opus, .oga). It renders as an inline audio player with play/pause and seeking.
+- Other links: any [text](URL) is clickable — web URLs open in the user's default browser; local file paths open in the system default application (any file type: PDF, documents, executables, folders, etc.).
+- For local files, use absolute paths or file:/// URLs. Only reference files you have verified exist (for example via tools, or that the user provided); never invent paths or URLs, or the media will fail to load.
+- Use media only when it genuinely helps; otherwise prefer plain text."#;
+
 /// Assemble the effective system prompt for a chat turn (docs/08):
 ///   [base prompt] + [chat prompt]
 ///   + [Environment info, for plan/write modes]
+///   + [Media & links formatting guidance, for plan/write modes]
 ///   + [Rules: global / project]
 ///   + [cross-chat sibling summaries, if hybrid/summary].
 ///
@@ -69,6 +82,12 @@ pub async fn effective_system_prompt(
         && include_global_sys
     {
         parts.push(environment_info_block(pool, project).await);
+    }
+
+    // App-level media/link formatting guidance (plan/write modes only; skipped
+    // when a project opts out of the global prompt, consistent with env info).
+    if (mode == "plan" || mode == "write") && include_global_sys {
+        parts.push(MEDIA_AND_LINKS_GUIDANCE.to_string());
     }
 
     // Rules block: global rules unless the project opts out, plus project rules.

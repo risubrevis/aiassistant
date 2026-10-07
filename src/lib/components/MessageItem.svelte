@@ -11,6 +11,8 @@
   import { renderMarkdown } from "$lib/markdown";
   import { m } from "$lib/i18n";
   import { formatSize } from "$lib/utils";
+  import { enhanceProse, type MediaImage } from "$lib/media";
+  import MediaViewer from "./MediaViewer.svelte";
 
   let { message, showThinking = false }: { message: UiMessage; showThinking?: boolean } = $props();
 
@@ -52,6 +54,15 @@
   });
 
   let textBlocks = $derived(message.blocks.filter((b) => b.type === "text"));
+
+  let mediaOpen = $state(false);
+  let mediaImages = $state<MediaImage[]>([]);
+  let mediaIndex = $state(0);
+  function openMedia(images: MediaImage[], index: number) {
+    mediaImages = images;
+    mediaIndex = index;
+    mediaOpen = true;
+  }
 </script>
 
 <div class="msg" class:user={isUser}>
@@ -102,11 +113,15 @@
         </div>
       {/if}
 
-      {#each textBlocks as b (b.id)}
-        <div class="prose">{@html renderMarkdown(b.text ?? "")}</div>
-      {/each}
+      <div class="prose-wrap" use:enhanceProse={{ onopen: openMedia }}>
+        {#each textBlocks as b (b.id)}
+          <div class="prose">{@html renderMarkdown(b.text ?? "")}</div>
+        {/each}
+      </div>
     </div>
   {/if}
+
+  <MediaViewer bind:open={mediaOpen} images={mediaImages} index={mediaIndex} onclose={() => (mediaOpen = false)} />
 </div>
 
 <style>
@@ -202,6 +217,7 @@
     font-size: 0.7rem;
     white-space: nowrap;
   }
+  .prose-wrap { min-width: 0; }
   .prose :global(p) { margin: 0.4em 0; }
   .prose :global(p:first-child) { margin-top: 0; }
   .prose :global(p:last-child) { margin-bottom: 0; }

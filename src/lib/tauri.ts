@@ -653,6 +653,8 @@ export const attachmentsForMessage = (messageId: string) =>
   invoke<Attachment[]>("attachments_for_message", { messageId });
 export const attachmentReadDataUrl = (attachmentId: string) =>
   invoke<string>("attachment_read_data_url", { attachmentId });
+export const mediaReadDataUrl = (path: string) =>
+  invoke<string>("media_read_data_url", { path });
 export const chatCreateInProject = (projectId: string) =>
   invoke<Chat>("chat_create_in_project", { projectId });
 export const projectChats = (projectId: string) =>

@@ -885,6 +885,71 @@ async fn attachment_read_data_url(
     Ok(format!("data:{};base64,{}", att.mime_type, b64))
 }
 
+fn media_mime_for_ext(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "ogg" => "audio/ogg",
+        "oga" => "audio/ogg",
+        "mov" => "video/quicktime",
+        "m4v" => "video/x-m4v",
+        "mkv" => "video/x-matroska",
+        "avi" => "video/x-msvideo",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        "opus" => "audio/opus",
+        "3gp" => "audio/3gpp",
+        _ => "application/octet-stream",
+    }
+}
+
+#[tauri::command]
+async fn media_read_data_url(path: String) -> Result<String, String> {
+    use base64::Engine;
+
+    const MAX_MEDIA_BYTES: u64 = 64 * 1024 * 1024;
+
+    let p = path.trim();
+    let p = p.strip_prefix("file://").unwrap_or(p);
+    // A Windows file URL may yield /C:/... ; drop the extra leading slash.
+    let p = if let Some(rest) = p.strip_prefix('/') {
+        if rest.len() >= 2 && rest.as_bytes()[1] == b':' {
+            rest
+        } else {
+            p
+        }
+    } else {
+        p
+    };
+    if p.is_empty() {
+        return Err("empty path".to_string());
+    }
+
+    let meta = std::fs::metadata(p).map_err(|e| e.to_string())?;
+    if meta.len() > MAX_MEDIA_BYTES {
+        return Err("file too large to embed".to_string());
+    }
+    let bytes = std::fs::read(p).map_err(|e| e.to_string())?;
+    let ext = std::path::Path::new(p)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let mime = media_mime_for_ext(ext);
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(format!("data:{};base64,{}", mime, b64))
+}
+
 #[tauri::command]
 fn chat_regenerate(
     chat_id: String,
@@ -4024,6 +4089,7 @@ pub fn run() {
             attachments_for_chat,
             attachments_for_message,
             attachment_read_data_url,
+            media_read_data_url,
             chat_regenerate,
             chat_edit_message,
             chat_export_markdown,

@@ -26,6 +26,8 @@
   } from "$lib/stores/chat";
   import { pendingAsk } from "$lib/stores/project";
   import { attachmentReadDataUrl, ptyInput, type ContentBlock } from "$lib/tauri";
+  import { enhanceProse, type MediaImage } from "$lib/media";
+  import MediaViewer from "./MediaViewer.svelte";
 
   let { messages, showThinking = false }: { messages: UiMessage[]; showThinking?: boolean } = $props();
 
@@ -172,6 +174,15 @@
     return () => clearInterval(timer);
   });
   $effect(() => () => clearTimeout(copyTimer));
+
+  let mediaOpen = $state(false);
+  let mediaImages = $state<MediaImage[]>([]);
+  let mediaIndex = $state(0);
+  function openMedia(images: MediaImage[], index: number) {
+    mediaImages = images;
+    mediaIndex = index;
+    mediaOpen = true;
+  }
 </script>
 
 <div class="msg">
@@ -210,7 +221,9 @@
               <div class="think-text">{thinkingCopyText}</div>
             {/if}
             {#each intermediateTextBlocks as b, i (i + ":" + (b.id ?? i))}
-              <div class="prose prose-sm">{@html renderMarkdown(b.text ?? "")}</div>
+              <div class="prose prose-sm" use:enhanceProse={{ onopen: openMedia }}>
+                {@html renderMarkdown(b.text ?? "")}
+              </div>
             {/each}
             {#each allTools as b, i (i + ":" + (b.id ?? i))}
               {@render toolEntry(b)}
@@ -220,9 +233,11 @@
       </div>
     {/if}
 
-    {#each answerTextBlocks as b, i (i + ":" + (b.id ?? i))}
-      <div class="prose">{@html renderMarkdown(b.text ?? "")}</div>
-    {/each}
+    <div class="turn-answer" use:enhanceProse={{ onopen: openMedia }}>
+      {#each answerTextBlocks as b, i (i + ":" + (b.id ?? i))}
+        <div class="prose">{@html renderMarkdown(b.text ?? "")}</div>
+      {/each}
+    </div>
     {#if anyStreaming && answerTextBlocks.length > 0}
       <span class="cursor"></span>
     {/if}
@@ -267,6 +282,8 @@
       {/if}
     </div>
   </div>
+
+  <MediaViewer bind:open={mediaOpen} images={mediaImages} index={mediaIndex} onclose={() => (mediaOpen = false)} />
 </div>
 
 {#snippet errorBanner()}
@@ -421,6 +438,7 @@
     word-break: break-word;
     overflow-wrap: break-word;
   }
+  .turn-answer { min-width: 0; }
   .prose :global(p) { margin: 0.4em 0; }
   .prose :global(p:first-child) { margin-top: 0; }
   .prose :global(p:last-child) { margin-bottom: 0; }
